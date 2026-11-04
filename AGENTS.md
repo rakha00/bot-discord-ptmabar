@@ -10,7 +10,7 @@ Dokumen ini adalah pedoman arsitektur, konvensi kode, dan aturan desain untuk pe
 * **Framework:** Discord.js v14 (`discord.js`, `@discordjs/voice`).
 * **Audio Engine:** FFmpeg + `opusscript` + `libsodium-wrappers`.
 * **TTS Engine:** Google Translate TTS Publik (`tl=id`, `client=tw-ob`, tanpa API key).
-* **Containerization:** Docker (`node:22-alpine` + `apk add ffmpeg`) & Docker Compose dengan volume mount `./sounds:/app/sounds`.
+* **Containerization:** Docker (`node:22-alpine` + `apk add ffmpeg`) & Docker Compose dengan volume mount `./sounds:/app/sounds` dan `./assets:/app/assets`.
 
 ---
 
@@ -27,6 +27,7 @@ bot-discord/
 │   ├── tts.js             # Client Google TTS & pemecah teks <= 200 karakter
 │   └── voiceManager.js    # Pengelola voice connection, antrean audio, & timer auto-leave
 ├── sounds/                # Direktori file lokal .mp3 soundboard (nama file = nama command)
+├── assets/                # Audio sistem (assets/alert.mp3 untuk efek suara pembuka donasi)
 ├── index.js               # Entry point utama (hanya registrasi event & inisialisasi)
 ├── Dockerfile             # Alpine Linux + FFmpeg
 ├── docker-compose.yml     # Auto-restart & volume mount sounds/

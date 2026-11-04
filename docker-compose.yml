@@ -7,3 +7,4 @@ services:
       - .env
     volumes:
       - ./sounds:/app/sounds
+      - ./assets:/app/assets

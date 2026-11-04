@@ -1,9 +1,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { EmbedBuilder } = require('discord.js');
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
+} = require('discord.js');
 const { playSoundboard } = require('../voiceManager');
 
 const SOUNDS_DIR = path.join(__dirname, '..', '..', 'sounds');
+const ITEMS_PER_PAGE = 15;
 
 function getAvailableSounds() {
   if (!fs.existsSync(SOUNDS_DIR)) return [];
@@ -69,29 +76,94 @@ function findClosestSound(query, soundList) {
   return bestMatch;
 }
 
+function createSoundListEmbed(sounds, page, totalPages) {
+  const start = page * ITEMS_PER_PAGE;
+  const end = start + ITEMS_PER_PAGE;
+  const pageItems = sounds.slice(start, end);
+
+  return new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('🔊 Daftar Soundboard')
+    .setDescription(pageItems.map(s => `• \`${s}\``).join('\n'))
+    .setFooter({ text: 'Gunakan: !sb <nama> [repeat]' });
+}
+
+function createPaginationRow(page, totalPages, disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('sb_prev')
+      .setLabel('◀ Prev')
+      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Primary)
+      .setDisabled(disabled || page === 0),
+    new ButtonBuilder()
+      .setCustomId('sb_next')
+      .setLabel('Next ▶')
+      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Primary)
+      .setDisabled(disabled || page >= totalPages - 1)
+  );
+}
+
 async function handleMessage(message) {
   const content = message.content.trim();
   if (!/^!sb(?:\s|$)/i.test(content)) return false;
 
   const parts = content.split(/\s+/).slice(1); // Potong '!sb'
 
-  // Kasus 1: !sb list
+  // Kasus 1: !sb list (dengan pagination tombol)
   if (parts.length > 0 && parts[0].toLowerCase() === 'list') {
     const sounds = getAvailableSounds();
-    const embed = new EmbedBuilder().setColor(0xF1C40F);
 
     if (sounds.length === 0) {
-      embed.setTitle('🔊 Daftar Soundboard')
+      const emptyEmbed = new EmbedBuilder()
+        .setColor(0xF1C40F)
+        .setTitle('🔊 Daftar Soundboard')
         .setDescription('Belum ada file audio di folder `sounds/`.');
-    } else {
-      embed.setTitle('🔊 Daftar Soundboard')
-        .setDescription(sounds.map(s => `• \`${s}\``).join('\n'))
-        .setFooter({ text: 'Gunakan: !sb <nama> [repeat]' });
+
+      await message.channel.send({ embeds: [emptyEmbed] }).catch((err) => {
+        console.error('❌ Gagal mengirim list soundboard:', err.message);
+      });
+      return true;
     }
 
-    await message.channel.send({ embeds: [embed] }).catch((err) => {
+    let currentPage = 0;
+    const totalPages = Math.ceil(sounds.length / ITEMS_PER_PAGE);
+
+    const embed = createSoundListEmbed(sounds, currentPage, totalPages);
+    const row = totalPages > 1 ? createPaginationRow(currentPage, totalPages) : null;
+
+    const sentMessage = await message.channel.send({
+      embeds: [embed],
+      components: row ? [row] : [],
+    }).catch((err) => {
       console.error('❌ Gagal mengirim list soundboard:', err.message);
     });
+
+    if (!sentMessage || totalPages <= 1) return true;
+
+    const collector = sentMessage.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 120_000, // 2 menit
+    });
+
+    collector.on('collect', async (interaction) => {
+      if (interaction.customId === 'sb_prev') {
+        if (currentPage > 0) currentPage--;
+      } else if (interaction.customId === 'sb_next') {
+        if (currentPage < totalPages - 1) currentPage++;
+      }
+
+      await interaction.update({
+        embeds: [createSoundListEmbed(sounds, currentPage, totalPages)],
+        components: [createPaginationRow(currentPage, totalPages)],
+      }).catch(() => {});
+    });
+
+    collector.on('end', async () => {
+      await sentMessage.edit({
+        components: [createPaginationRow(currentPage, totalPages, true)],
+      }).catch(() => {});
+    });
+
     return true;
   }
 
@@ -145,7 +217,7 @@ async function handleMessage(message) {
   try {
     await playSoundboard(voiceChannel, filePath, repeat);
   } catch (err) {
-    console.error('❌ Error memutar soundboard:', err);
+    console.error('❌ Error memputar soundboard:', err);
   }
 
   return true;
@@ -157,4 +229,6 @@ module.exports = {
   findSoundFile,
   findClosestSound,
   levenshteinDistance,
+  createSoundListEmbed,
+  ITEMS_PER_PAGE,
 };

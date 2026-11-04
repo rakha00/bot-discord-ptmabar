@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -12,6 +14,7 @@ const { splitText, getAudioResource } = require('./tts');
 // Durasi timeout auto-leave (keduanya 5 menit)
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 menit jika idle tidak ada donasi
 const EMPTY_TIMEOUT_MS = 5 * 60 * 1000; // 5 menit jika voice channel kosong
+const ALERT_PATH = path.join(__dirname, '..', 'assets', 'alert.mp3');
 
 // Cache per-guild: { player, queue, isPlaying, idleTimer, emptyTimer }
 const players = new Map();
@@ -172,6 +175,15 @@ async function playDonation(voiceChannel, speechText) {
 
   connection.subscribe(guildData.player);
 
+  // 1. Putar bunyi efek bel/kasir (Cha-ching!) jika file alert.mp3 ada
+  if (fs.existsSync(ALERT_PATH)) {
+    console.log('[Donasi] Memutar efek suara pembuka alert.mp3');
+    guildData.queue.push({ type: 'file', path: ALERT_PATH });
+  } else {
+    console.warn('[Donasi] File alert.mp3 tidak ditemukan di:', ALERT_PATH);
+  }
+
+  // 2. Masukkan teks donasi TTS ke antrean
   const chunks = splitText(speechText);
   guildData.queue.push(...chunks);
 
@@ -219,4 +231,5 @@ module.exports = {
   checkChannelOccupancy,
   IDLE_TIMEOUT_MS,
   EMPTY_TIMEOUT_MS,
+  ALERT_PATH,
 };
