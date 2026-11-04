@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    container_name: discord-tts-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./sounds:/app/sounds
