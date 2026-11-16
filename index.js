@@ -23,25 +23,9 @@ const slashCommands = [
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 
-  const guildIds = process.env.GUILD_ID
-    ? process.env.GUILD_ID.split(',').map(id => id.trim()).filter(Boolean)
-    : [];
-
   try {
-    if (guildIds.length > 0) {
-      for (const gid of guildIds) {
-        const guild = client.guilds.cache.get(gid);
-        if (guild) {
-          await guild.commands.set(slashCommands);
-          console.log(`✅ Slash command terdaftar untuk Server ID: ${gid}`);
-        } else {
-          console.warn(`⚠️ GUILD_ID ${gid} belum ada di bot atau bot belum masuk ke server tersebut.`);
-        }
-      }
-    } else {
-      await client.application.commands.set(slashCommands);
-      console.log('✅ Slash command terdaftar secara Global!');
-    }
+    await client.application.commands.set(slashCommands);
+    console.log('✅ Slash command terdaftar secara Global!');
   } catch (err) {
     console.error('❌ Gagal mendaftarkan slash command:', err);
   }
