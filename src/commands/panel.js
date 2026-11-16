@@ -10,12 +10,22 @@ const { playSoundboard, stopAudio } = require('../voiceManager');
 
 const PANEL_CHANNEL_NAME = 'bot-ptmabar';
 const PANEL_TRIGGER = /^!panel(?:\s|$)/i;
-const SOUNDS_PER_PAGE = 12; // 3 baris x 4 tombol per halaman
-const BUTTONS_PER_ROW = 4;
+const SOUNDS_PER_PAGE = 11; // 11 sound + 1 tombol Stop = tepat 4 baris x 3 tombol
+const BUTTONS_PER_ROW = 3;
+const TARGET_LABEL_LEN = 13; // Panjang karakter seragam menggunakan non-breaking space
 
 const panelSlashCommand = new SlashCommandBuilder()
   .setName('panel')
-  .setDescription('Tampilkan soundboard control panel');
+  .setDescription(`Tampilkan soundboard control panel di channel #${PANEL_CHANNEL_NAME}`);
+
+// Helper: Meratakan panjang teks dengan non-breaking space (\u00A0) agar lebar tombol seragam
+function padLabel(str, targetLen = TARGET_LABEL_LEN) {
+  const diff = targetLen - str.length;
+  if (diff <= 0) return str;
+  const left = Math.floor(diff / 2);
+  const right = diff - left;
+  return '\u00A0'.repeat(left) + str + '\u00A0'.repeat(right);
+}
 
 function createPanelPayload(page = 0) {
   const sounds = getAvailableSounds();
@@ -37,42 +47,57 @@ function createPanelPayload(page = 0) {
 
   const rows = [];
 
-  // 1. Baris Tombol Sound (4 tombol per baris)
-  for (let i = 0; i < pageSounds.length; i += BUTTONS_PER_ROW) {
-    const slice = pageSounds.slice(i, i + BUTTONS_PER_ROW);
-    const row = new ActionRowBuilder().addComponents(
-      slice.map(sound =>
-        new ButtonBuilder()
-          .setCustomId(`sb_play_${sound}`)
-          .setLabel(sound)
-          .setStyle(ButtonStyle.Secondary)
-      )
-    );
-    rows.push(row);
+  // Baris 1 - 3: Masing-masing tepat 3 tombol sound (total 9 sound)
+  for (let r = 0; r < 3; r++) {
+    const slice = pageSounds.slice(r * BUTTONS_PER_ROW, (r + 1) * BUTTONS_PER_ROW);
+    if (slice.length > 0) {
+      const row = new ActionRowBuilder().addComponents(
+        slice.map(sound =>
+          new ButtonBuilder()
+            .setCustomId(`sb_play_${sound}`)
+            .setLabel(padLabel(sound))
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+      rows.push(row);
+    }
   }
 
-  // 2. Baris Navigasi & Kontrol (Prev, Stop, Next, Refresh)
+  // Baris 4: Sisa sound halaman ini + Tombol Stop (tepat 3 tombol)
+  const remainingSounds = pageSounds.slice(9, 11);
+  const row4 = new ActionRowBuilder();
+  for (const sound of remainingSounds) {
+    row4.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`sb_play_${sound}`)
+        .setLabel(padLabel(sound))
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+  row4.addComponents(
+    new ButtonBuilder()
+      .setCustomId('sb_ctrl_stop')
+      .setLabel(padLabel('⏹️ Stop'))
+      .setStyle(ButtonStyle.Danger)
+  );
+  rows.push(row4);
+
+  // Baris 5: Navigasi (Prev, Refresh, Next) - tepat 3 tombol
   const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`sb_page_${currentPage - 1}`)
-      .setLabel('◀ Prev')
+      .setLabel(padLabel('◀ Prev', 8))
       .setStyle(ButtonStyle.Primary)
       .setDisabled(currentPage === 0),
     new ButtonBuilder()
-      .setCustomId('sb_ctrl_stop')
-      .setLabel('Stop')
-      .setEmoji('⏹️')
-      .setStyle(ButtonStyle.Danger),
+      .setCustomId(`sb_ctrl_refresh_${currentPage}`)
+      .setLabel(padLabel('🔄 Refresh', 8))
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`sb_page_${currentPage + 1}`)
-      .setLabel('Next ▶')
+      .setLabel(padLabel('Next ▶', 8))
       .setStyle(ButtonStyle.Primary)
-      .setDisabled(currentPage >= totalPages - 1),
-    new ButtonBuilder()
-      .setCustomId(`sb_ctrl_refresh_${currentPage}`)
-      .setLabel('Refresh')
-      .setEmoji('🔄')
-      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(currentPage >= totalPages - 1)
   );
   rows.push(navRow);
 
@@ -85,18 +110,29 @@ function createPanelPayload(page = 0) {
 async function handleMessage(message) {
   const content = message.content.trim();
 
-  // Jalankan !panel di channel mana pun
-  if (PANEL_TRIGGER.test(content)) {
-    await message.delete().catch(() => {});
-    await message.channel.send(createPanelPayload(0)).catch((err) => {
-      console.error('❌ Gagal mengirim soundboard panel:', err.message);
+  // 1. Jika perintah !panel dipanggil di luar channel #bot-ptmabar
+  if (PANEL_TRIGGER.test(content) && message.channel.name !== PANEL_CHANNEL_NAME) {
+    const errorEmbed = new EmbedBuilder()
+      .setColor(0xED4245)
+      .setDescription(`⚠️ Soundboard panel hanya dapat diinstal di channel \`#${PANEL_CHANNEL_NAME}\`!`);
+
+    await message.channel.send({ embeds: [errorEmbed] }).catch((err) => {
+      console.error('❌ Gagal mengirim error channel panel:', err.message);
     });
     return true;
   }
 
-  // Khusus channel #bot-ptmabar, auto-delete pesan teks biasa agar tetap steril
+  // 2. Jika di channel khusus #bot-ptmabar
   if (message.channel.name === PANEL_CHANNEL_NAME) {
+    // Hapus chat apapun agar channel tetap bersih
     await message.delete().catch(() => {});
+
+    // Jika yang diketik adalah !panel, kirim pesan soundboard panel
+    if (PANEL_TRIGGER.test(content)) {
+      await message.channel.send(createPanelPayload(0)).catch((err) => {
+        console.error('❌ Gagal mengirim soundboard panel:', err.message);
+      });
+    }
     return true;
   }
 
@@ -104,8 +140,16 @@ async function handleMessage(message) {
 }
 
 async function handleInteraction(interaction) {
-  // 1. Slash Command /panel (bisa di channel mana pun)
+  // 1. Slash Command /panel (Wajib di channel #bot-ptmabar)
   if (interaction.isChatInputCommand() && interaction.commandName === 'panel') {
+    if (interaction.channel?.name !== PANEL_CHANNEL_NAME) {
+      const errorEmbed = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setDescription(`⚠️ Soundboard panel hanya dapat diinstal di channel \`#${PANEL_CHANNEL_NAME}\`!`);
+      await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+      return true;
+    }
+
     await interaction.reply(createPanelPayload(0));
     return true;
   }
@@ -140,10 +184,11 @@ async function handleInteraction(interaction) {
     return true;
   }
 
-  // 5. Tombol Play Soundboard (Senyap & Langsung Override)
+  // 5. Tombol Play Soundboard (Senyap, Otomatis Berpindah Voice Channel, & Langsung Override)
   if (customId.startsWith('sb_play_')) {
     await interaction.deferUpdate().catch(() => {});
 
+    // Voice channel pengguna yang mengklik tombol
     const voiceChannel = interaction.member?.voice?.channel;
     if (!voiceChannel) return true;
 
@@ -152,7 +197,7 @@ async function handleInteraction(interaction) {
     if (!filePath) return true;
 
     try {
-      // override = true (menimpa audio yang sedang berjalan)
+      // playSoundboard otomatis memindahkan bot ke voiceChannel pengguna & melakukan override
       await playSoundboard(voiceChannel, filePath, 1, true);
     } catch (err) {
       console.error('❌ Gagal memutar soundboard:', err);
@@ -172,4 +217,5 @@ module.exports = {
   PANEL_TRIGGER,
   SOUNDS_PER_PAGE,
   BUTTONS_PER_ROW,
+  padLabel,
 };

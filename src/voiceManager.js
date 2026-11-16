@@ -152,6 +152,14 @@ async function getOrCreateConnection(voiceChannel) {
       guildId: voiceChannel.guild.id,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
     });
+  } else if (connection.joinConfig.channelId !== voiceChannel.id) {
+    // Otomatis berpindah ke voice channel pengguna yang baru mengklik tombol
+    console.log(`[Voice Switch] Berpindah ke voice channel "${voiceChannel.name || voiceChannel.id}"`);
+    connection.rejoin({
+      channelId: voiceChannel.id,
+      selfDeaf: true,
+      selfMute: false,
+    });
   }
 
   // Wajib tunggu status koneksi benar-benar Ready (handshake UDP & enkripsi voice selesai)
