@@ -194,7 +194,7 @@ async function playDonation(voiceChannel, speechText) {
   checkChannelOccupancy(voiceChannel.guild);
 }
 
-async function playSoundboard(voiceChannel, filePath, repeat = 1) {
+async function playSoundboard(voiceChannel, filePath, repeat = 1, override = true) {
   const connection = await getOrCreateConnection(voiceChannel);
   const guildData = getGuildData(voiceChannel.guild.id);
   clearIdleTimer(voiceChannel.guild.id);
@@ -202,12 +202,27 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1) {
   connection.subscribe(guildData.player);
 
   const times = Math.min(Math.max(parseInt(repeat, 10) || 1, 1), 10);
-  for (let i = 0; i < times; i++) {
-    guildData.queue.push({ type: 'file', path: filePath });
-  }
 
-  if (!guildData.isPlaying) {
-    playNext(voiceChannel.guild.id);
+  if (override) {
+    // Override: Kosongkan antrean sebelumnya dan hentikan audio yang sedang berjalan
+    guildData.queue = [];
+    for (let i = 0; i < times; i++) {
+      guildData.queue.push({ type: 'file', path: filePath });
+    }
+
+    if (guildData.player.state.status !== AudioPlayerStatus.Idle) {
+      guildData.player.stop(true);
+    } else {
+      playNext(voiceChannel.guild.id);
+    }
+  } else {
+    for (let i = 0; i < times; i++) {
+      guildData.queue.push({ type: 'file', path: filePath });
+    }
+
+    if (!guildData.isPlaying) {
+      playNext(voiceChannel.guild.id);
+    }
   }
 
   checkChannelOccupancy(voiceChannel.guild);
