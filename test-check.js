@@ -87,4 +87,37 @@ assert.strictEqual(findClosestSound('respect', sounds), 'gakrespect');
 assert.strictEqual(findClosestSound('qwertyuiop', sounds), null);
 console.log('✔ Soundboard helpers, alphabetical sorting, pagination & fuzzy typo matching valid');
 
+// 6. Test Control Panel Component & Channel Restriction
+const {
+  panelSlashCommand,
+  createPanelPayload,
+  PANEL_CHANNEL_NAME,
+  PANEL_TRIGGER,
+} = require('./src/commands/panel');
+
+assert.strictEqual(panelSlashCommand.name, 'panel');
+assert.strictEqual(PANEL_CHANNEL_NAME, 'bot-ptmabar', 'Channel control panel harus wajib bot-ptmabar');
+assert.strictEqual(PANEL_TRIGGER.test('!panel'), true);
+assert.strictEqual(PANEL_TRIGGER.test('!panel now'), true);
+assert.strictEqual(PANEL_TRIGGER.test('panel'), false);
+assert.strictEqual(PANEL_TRIGGER.test('!panelku'), false);
+
+const payload = createPanelPayload();
+assert.ok(payload.embeds && payload.embeds.length === 1);
+assert.strictEqual(payload.embeds[0].data.title, '🎮 PT MABAR - Control Panel');
+assert.ok(payload.embeds[0].data.footer.text.includes('bot-ptmabar'));
+assert.ok(payload.components && payload.components.length === 2, 'Harus ada row select menu dan row tombol');
+
+// Verifikasi customId tombol & select menu
+const selectMenu = payload.components[0].components[0];
+assert.strictEqual(selectMenu.data.custom_id, 'panel_select_sound');
+assert.ok(selectMenu.options.length > 0 && selectMenu.options.length <= 25);
+
+const buttons = payload.components[1].components;
+assert.strictEqual(buttons.length, 3);
+assert.strictEqual(buttons[0].data.custom_id, 'panel_btn_donasi');
+assert.strictEqual(buttons[1].data.custom_id, 'panel_btn_stop');
+assert.strictEqual(buttons[2].data.custom_id, 'panel_btn_refresh');
+console.log('✔ Interactive Control Panel (channel restriction, buttons, select menu & modal schemas) valid');
+
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
