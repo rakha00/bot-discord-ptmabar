@@ -83,9 +83,23 @@ function createPanelPayload() {
 
 async function handleMessage(message) {
   const content = message.content.trim();
-  if (!PANEL_TRIGGER.test(content)) return false;
 
-  if (message.channel.name !== PANEL_CHANNEL_NAME) {
+  // Jika pesan dikirim di channel khusus #bot-ptmabar
+  if (message.channel.name === PANEL_CHANNEL_NAME) {
+    // Hapus pesan pengguna agar channel selalu bersih hanya ada panel bot
+    await message.delete().catch(() => {});
+
+    // Jika perintahnya adalah !panel, kirim pesan control panel
+    if (PANEL_TRIGGER.test(content)) {
+      await message.channel.send(createPanelPayload()).catch((err) => {
+        console.error('❌ Gagal mengirim control panel:', err.message);
+      });
+    }
+    return true;
+  }
+
+  // Jika perintah !panel dipanggil di luar channel #bot-ptmabar
+  if (PANEL_TRIGGER.test(content)) {
     const errorEmbed = new EmbedBuilder()
       .setColor(0xED4245)
       .setDescription(`⚠️ Control panel hanya dapat diinstal di channel \`#${PANEL_CHANNEL_NAME}\`!`);
@@ -96,14 +110,7 @@ async function handleMessage(message) {
     return true;
   }
 
-  // Hapus pesan perintah trigger jika diizinkan agar channel tetap rapi
-  await message.delete().catch(() => {});
-
-  await message.channel.send(createPanelPayload()).catch((err) => {
-    console.error('❌ Gagal mengirim control panel:', err.message);
-  });
-
-  return true;
+  return false;
 }
 
 async function handleInteraction(interaction) {
