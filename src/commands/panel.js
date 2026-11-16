@@ -10,22 +10,12 @@ const { playSoundboard, stopAudio } = require('../voiceManager');
 
 const PANEL_CHANNEL_NAME = 'bot-ptmabar';
 const PANEL_TRIGGER = /^!panel(?:\s|$)/i;
-const SOUNDS_PER_PAGE = 11; // 11 sound + 1 tombol Stop = tepat 4 baris x 3 tombol
-const BUTTONS_PER_ROW = 3;
-const TARGET_LABEL_LEN = 13; // Panjang karakter seragam menggunakan non-breaking space
+const SOUNDS_PER_PAGE = 20; // 4 baris x 5 tombol sound (tampilan 4x5)
+const BUTTONS_PER_ROW = 5;
 
 const panelSlashCommand = new SlashCommandBuilder()
   .setName('panel')
   .setDescription(`Tampilkan soundboard control panel di channel #${PANEL_CHANNEL_NAME}`);
-
-// Helper: Meratakan panjang teks dengan non-breaking space (\u00A0) agar lebar tombol seragam
-function padLabel(str, targetLen = TARGET_LABEL_LEN) {
-  const diff = targetLen - str.length;
-  if (diff <= 0) return str;
-  const left = Math.floor(diff / 2);
-  const right = diff - left;
-  return '\u00A0'.repeat(left) + str + '\u00A0'.repeat(right);
-}
 
 function createPanelPayload(page = 0) {
   const sounds = getAvailableSounds();
@@ -47,57 +37,42 @@ function createPanelPayload(page = 0) {
 
   const rows = [];
 
-  // Baris 1 - 3: Masing-masing tepat 3 tombol sound (total 9 sound)
-  for (let r = 0; r < 3; r++) {
-    const slice = pageSounds.slice(r * BUTTONS_PER_ROW, (r + 1) * BUTTONS_PER_ROW);
-    if (slice.length > 0) {
-      const row = new ActionRowBuilder().addComponents(
-        slice.map(sound =>
-          new ButtonBuilder()
-            .setCustomId(`sb_play_${sound}`)
-            .setLabel(padLabel(sound))
-            .setStyle(ButtonStyle.Secondary)
-        )
-      );
-      rows.push(row);
-    }
-  }
-
-  // Baris 4: Sisa sound halaman ini + Tombol Stop (tepat 3 tombol)
-  const remainingSounds = pageSounds.slice(9, 11);
-  const row4 = new ActionRowBuilder();
-  for (const sound of remainingSounds) {
-    row4.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`sb_play_${sound}`)
-        .setLabel(padLabel(sound))
-        .setStyle(ButtonStyle.Secondary)
+  // 1. Baris Tombol Sound: 4 baris x 5 tombol sound (tampilan 4x5)
+  for (let i = 0; i < pageSounds.length; i += BUTTONS_PER_ROW) {
+    const slice = pageSounds.slice(i, i + BUTTONS_PER_ROW);
+    const row = new ActionRowBuilder().addComponents(
+      slice.map(sound =>
+        new ButtonBuilder()
+          .setCustomId(`sb_play_${sound}`)
+          .setLabel(sound)
+          .setStyle(ButtonStyle.Secondary)
+      )
     );
+    rows.push(row);
   }
-  row4.addComponents(
-    new ButtonBuilder()
-      .setCustomId('sb_ctrl_stop')
-      .setLabel(padLabel('⏹️ Stop'))
-      .setStyle(ButtonStyle.Danger)
-  );
-  rows.push(row4);
 
-  // Baris 5: Navigasi (Prev, Refresh, Next) - tepat 3 tombol
+  // 2. Baris Navigasi & Kontrol: Prev, Stop, Next, Refresh sejajar di baris bawah
   const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`sb_page_${currentPage - 1}`)
-      .setLabel(padLabel('◀ Prev', 8))
+      .setLabel('◀ Prev')
       .setStyle(ButtonStyle.Primary)
       .setDisabled(currentPage === 0),
     new ButtonBuilder()
-      .setCustomId(`sb_ctrl_refresh_${currentPage}`)
-      .setLabel(padLabel('🔄 Refresh', 8))
-      .setStyle(ButtonStyle.Secondary),
+      .setCustomId('sb_ctrl_stop')
+      .setLabel('Stop')
+      .setEmoji('⏹️')
+      .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId(`sb_page_${currentPage + 1}`)
-      .setLabel(padLabel('Next ▶', 8))
+      .setLabel('Next ▶')
       .setStyle(ButtonStyle.Primary)
-      .setDisabled(currentPage >= totalPages - 1)
+      .setDisabled(currentPage >= totalPages - 1),
+    new ButtonBuilder()
+      .setCustomId(`sb_ctrl_refresh_${currentPage}`)
+      .setLabel('Refresh')
+      .setEmoji('🔄')
+      .setStyle(ButtonStyle.Secondary)
   );
   rows.push(navRow);
 
@@ -124,7 +99,7 @@ async function handleMessage(message) {
 
   // 2. Jika di channel khusus #bot-ptmabar
   if (message.channel.name === PANEL_CHANNEL_NAME) {
-    // Hapus chat apapun agar channel tetap bersih
+    // Hapus chat apapun agar channel selalu bersih
     await message.delete().catch(() => {});
 
     // Jika yang diketik adalah !panel, kirim pesan soundboard panel
@@ -197,7 +172,6 @@ async function handleInteraction(interaction) {
     if (!filePath) return true;
 
     try {
-      // playSoundboard otomatis memindahkan bot ke voiceChannel pengguna & melakukan override
       await playSoundboard(voiceChannel, filePath, 1, true);
     } catch (err) {
       console.error('❌ Gagal memutar soundboard:', err);
@@ -217,5 +191,4 @@ module.exports = {
   PANEL_TRIGGER,
   SOUNDS_PER_PAGE,
   BUTTONS_PER_ROW,
-  padLabel,
 };

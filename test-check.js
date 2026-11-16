@@ -102,7 +102,7 @@ assert.strictEqual(PANEL_TRIGGER.test('!panel'), true);
 assert.strictEqual(PANEL_TRIGGER.test('!panel now'), true);
 assert.strictEqual(PANEL_TRIGGER.test('panel'), false);
 assert.strictEqual(PANEL_TRIGGER.test('!panelku'), false);
-assert.strictEqual(SOUNDS_PER_PAGE, 11, 'Soundboard memuat 11 sound per halaman (3x3 sound + 1 row sound+stop + 1 row nav)');
+assert.strictEqual(SOUNDS_PER_PAGE, 20, 'Soundboard memuat 20 sound per halaman (tampilan 4x5)');
 
 // Page 0 (Halaman 1)
 const page0 = createPanelPayload(0);
@@ -110,19 +110,26 @@ assert.ok(page0.embeds && page0.embeds.length === 1);
 assert.strictEqual(page0.embeds[0].data.title, '🎮 PT MABAR - Soundboard');
 assert.strictEqual(page0.embeds[0].data.description, 'Klik tombol di bawah untuk langsung memutar sound di Voice Channel.');
 assert.ok(page0.embeds[0].data.footer.text.includes('Halaman 1/2'));
-assert.strictEqual(page0.components.length, 5, 'Harus ada 5 baris (4 baris sound/stop + 1 baris navigasi)');
+assert.strictEqual(page0.components.length, 5, 'Harus ada 5 baris (4 baris sound + 1 baris navigasi/kontrol)');
 
-// Verifikasi setiap baris tepat 3 tombol (simetris sempurna 3x5)
-for (const row of page0.components) {
-  assert.strictEqual(row.components.length, 3, 'Setiap baris di halaman 1 tepat 3 tombol agar simetris sempurna');
+// Verifikasi 4 baris pertama masing-masing tepat 5 tombol sound (tampilan 4x5)
+for (let i = 0; i < 4; i++) {
+  assert.strictEqual(page0.components[i].components.length, 5, `Baris ${i + 1} harus tepat 5 tombol`);
 }
+
+// Baris ke-5: Prev, Stop, Next, Refresh (4 tombol)
+const navRowPage0 = page0.components[4];
+assert.strictEqual(navRowPage0.components.length, 4, 'Baris kontrol harus sejajar 4 tombol: Prev, Stop, Next, Refresh');
 
 const page0Buttons = page0.components.flatMap(row => row.components);
 const soundBtnsPage0 = page0Buttons.filter(b => b.data.custom_id.startsWith('sb_play_'));
-assert.strictEqual(soundBtnsPage0.length, 11, 'Halaman 1 harus memuat 11 sound');
+assert.strictEqual(soundBtnsPage0.length, 20, 'Halaman 1 harus memuat 20 sound');
 
-const prevBtnPage0 = page0Buttons.find(b => b.data.custom_id.startsWith('sb_page_') && b.data.label.includes('Prev'));
-const nextBtnPage0 = page0Buttons.find(b => b.data.custom_id.startsWith('sb_page_') && b.data.label.includes('Next'));
+const prevBtnPage0 = navRowPage0.components.find(b => b.data.label === '◀ Prev');
+const stopBtnPage0 = navRowPage0.components.find(b => b.data.label === 'Stop');
+const nextBtnPage0 = navRowPage0.components.find(b => b.data.label === 'Next ▶');
+const refreshBtnPage0 = navRowPage0.components.find(b => b.data.label === 'Refresh');
+assert.ok(prevBtnPage0 && stopBtnPage0 && nextBtnPage0 && refreshBtnPage0, 'Semua 4 tombol kontrol harus ada di baris bawah');
 assert.strictEqual(Boolean(prevBtnPage0.data.disabled), true, 'Prev harus disabled di halaman pertama');
 assert.strictEqual(Boolean(nextBtnPage0.data.disabled), false, 'Next harus enabled di halaman pertama');
 
@@ -130,22 +137,15 @@ assert.strictEqual(Boolean(nextBtnPage0.data.disabled), false, 'Next harus enabl
 const page1 = createPanelPayload(1);
 assert.ok(page1.embeds[0].data.footer.text.includes('Halaman 2/2'));
 assert.strictEqual(page1.embeds[0].data.title, '🎮 PT MABAR - Soundboard');
-assert.strictEqual(page1.components.length, 5, 'Halaman 2 juga harus tepat 5 baris');
-
-for (const row of page1.components) {
-  assert.strictEqual(row.components.length, 3, 'Setiap baris di halaman 2 tepat 3 tombol agar simetris sempurna');
-}
+assert.strictEqual(page1.components.length, 2, 'Halaman 2 harus 2 baris (1 baris sisa sound + 1 baris kontrol)');
 
 const page1Buttons = page1.components.flatMap(row => row.components);
 const soundBtnsPage1 = page1Buttons.filter(b => b.data.custom_id.startsWith('sb_play_'));
-assert.strictEqual(soundBtnsPage1.length, 11, 'Halaman 2 harus memuat 11 sound');
+const expectedRemaining = sounds.length - 20;
+assert.strictEqual(soundBtnsPage1.length, expectedRemaining, `Halaman 2 harus memuat sisa ${expectedRemaining} sound`);
 
-const nextBtnPage1 = page1Buttons.find(b => b.data.custom_id.startsWith('sb_page_') && b.data.label.includes('Next'));
+const nextBtnPage1 = page1.components[1].components.find(b => b.data.label === 'Next ▶');
 assert.strictEqual(Boolean(nextBtnPage1.data.disabled), true, 'Next harus disabled di halaman terakhir');
-
-// Verifikasi tombol Stop & Refresh
-assert.ok(page0Buttons.find(b => b.data.custom_id === 'sb_ctrl_stop'), 'Tombol Stop harus ada');
-assert.ok(page0Buttons.find(b => b.data.custom_id.startsWith('sb_ctrl_refresh')), 'Tombol Refresh harus ada');
-console.log('✔ Simple Soundboard Panel (3x5 symmetric grid, clean embed, voice switch, channel lock) valid');
+console.log('✔ Simple Soundboard Panel (4x5 sound grid + bottom row controls, clean embed, voice switch, channel lock) valid');
 
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
