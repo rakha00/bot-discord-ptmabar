@@ -104,20 +104,24 @@ assert.strictEqual(PANEL_TRIGGER.test('!panelku'), false);
 
 const payload = createPanelPayload();
 assert.ok(payload.embeds && payload.embeds.length === 1);
-assert.strictEqual(payload.embeds[0].data.title, '🎮 PT MABAR - Control Panel');
+assert.strictEqual(payload.embeds[0].data.title, '🎮 PT MABAR - Soundboard Panel');
 assert.ok(payload.embeds[0].data.footer.text.includes('bot-ptmabar'));
-assert.ok(payload.components && payload.components.length === 2, 'Harus ada row select menu dan row tombol');
+assert.strictEqual(payload.components.length, 5, 'Harus ada 5 baris tombol untuk 23 sound + Stop + Refresh');
 
-// Verifikasi customId tombol & select menu
-const selectMenu = payload.components[0].components[0];
-assert.strictEqual(selectMenu.data.custom_id, 'panel_select_sound');
-assert.ok(selectMenu.options.length > 0 && selectMenu.options.length <= 25);
+// Verifikasi tombol soundboard
+const allButtons = payload.components.flatMap(row => row.components);
+assert.strictEqual(allButtons.length, 25, 'Total tombol harus 25 (23 sound + 1 Stop + 1 Refresh)');
 
-const buttons = payload.components[1].components;
-assert.strictEqual(buttons.length, 3);
-assert.strictEqual(buttons[0].data.custom_id, 'panel_btn_donasi');
-assert.strictEqual(buttons[1].data.custom_id, 'panel_btn_stop');
-assert.strictEqual(buttons[2].data.custom_id, 'panel_btn_refresh');
-console.log('✔ Interactive Control Panel (channel restriction, buttons, select menu & modal schemas) valid');
+const soundButtons = allButtons.filter(btn => btn.data.custom_id.startsWith('sb_play_'));
+assert.strictEqual(soundButtons.length, 23, 'Harus ada 23 tombol pemutar sound');
+assert.ok(soundButtons.some(btn => btn.data.custom_id === 'sb_play_adit'));
+assert.ok(soundButtons.some(btn => btn.data.custom_id === 'sb_play_ml'));
+
+// Verifikasi tombol kontrol Stop dan Refresh
+const stopButton = allButtons.find(btn => btn.data.custom_id === 'sb_ctrl_stop');
+const refreshButton = allButtons.find(btn => btn.data.custom_id === 'sb_ctrl_refresh');
+assert.ok(stopButton, 'Tombol Stop harus ada');
+assert.ok(refreshButton, 'Tombol Refresh harus ada');
+console.log('✔ Soundboard Grid Panel (5 rows x 5 buttons, channel restriction, silent actions) valid');
 
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
