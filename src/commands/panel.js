@@ -10,11 +10,21 @@ const { playSoundboard, stopAudio } = require('../voiceManager');
 
 const PANEL_CHANNEL_NAME = 'bot-ptmabar';
 const PANEL_TRIGGER = /^!panel(?:\s|$)/i;
-const SOUNDS_PER_PAGE = 12; // 3 baris x 4 tombol per halaman untuk tampilan pad yang rapi
+const SOUNDS_PER_PAGE = 12; // 3 baris x 4 tombol per halaman
+const BUTTONS_PER_ROW = 4;
 
 const panelSlashCommand = new SlashCommandBuilder()
   .setName('panel')
   .setDescription(`Tampilkan soundboard launchpad di channel #${PANEL_CHANNEL_NAME}`);
+
+// Helper: Meratakan panjang teks dengan spasi tak kasat mata (Braille blank) agar tombol sejajar sempurna
+function padLabel(str, targetLen) {
+  const diff = targetLen - str.length;
+  if (diff <= 0) return str;
+  const padLeft = Math.floor(diff / 2);
+  const padRight = diff - padLeft;
+  return '\u2800'.repeat(padLeft) + str + '\u2800'.repeat(padRight);
+}
 
 function createPanelPayload(page = 0) {
   const sounds = getAvailableSounds();
@@ -24,6 +34,9 @@ function createPanelPayload(page = 0) {
 
   const start = currentPage * SOUNDS_PER_PAGE;
   const pageSounds = sounds.slice(start, start + SOUNDS_PER_PAGE);
+
+  // Cari panjang karakter terpanjang agar semua tombol memiliki lebar seragam
+  const targetLen = Math.max(...sounds.map(s => s.length), 11);
 
   const panelEmbed = new EmbedBuilder()
     .setColor(0xF1C40F)
@@ -38,21 +51,39 @@ function createPanelPayload(page = 0) {
 
   const rows = [];
 
-  // 1. Baris Tombol Sound: Maksimal 4 tombol per baris (lebar, jelas di HP/Desktop)
-  for (let i = 0; i < pageSounds.length; i += 4) {
-    const slice = pageSounds.slice(i, i + 4);
-    const row = new ActionRowBuilder().addComponents(
-      slice.map(sound =>
+  // 1. Baris Tombol Sound: Tepat 4 tombol per baris (sejajar rapi dalam 4 kolom simetris)
+  for (let r = 0; r < 3; r++) {
+    const rowSounds = pageSounds.slice(r * BUTTONS_PER_ROW, (r + 1) * BUTTONS_PER_ROW);
+    if (rowSounds.length === 0 && r > 0) break;
+
+    const row = new ActionRowBuilder();
+
+    // Tambahkan tombol sound yang ada
+    for (const sound of rowSounds) {
+      row.addComponents(
         new ButtonBuilder()
           .setCustomId(`sb_play_${sound}`)
-          .setLabel(sound)
+          .setLabel(padLabel(sound, targetLen))
           .setStyle(ButtonStyle.Secondary)
-      )
-    );
+      );
+    }
+
+    // Isi slot kosong dengan tombol placeholder non-aktif agar kolom selalu sejajar 4x4
+    while (row.components.length < BUTTONS_PER_ROW) {
+      const emptyIndex = row.components.length;
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`sb_empty_${currentPage}_${r}_${emptyIndex}`)
+          .setLabel('\u2800'.repeat(targetLen))
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      );
+    }
+
     rows.push(row);
   }
 
-  // 2. Baris Navigasi & Kontrol (Prev, Stop, Next, Refresh)
+  // 2. Baris Navigasi & Kontrol: Tepat 4 tombol sejajar (Prev, Stop, Next, Refresh)
   const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`sb_page_${currentPage - 1}`)
@@ -135,6 +166,12 @@ async function handleInteraction(interaction) {
 
   const customId = interaction.customId;
 
+  // Abaikan tombol slot kosong
+  if (customId.startsWith('sb_empty_')) {
+    await interaction.deferUpdate().catch(() => {});
+    return true;
+  }
+
   // 2. Tombol Navigasi Halaman
   if (customId.startsWith('sb_page_')) {
     const targetPage = parseInt(customId.replace('sb_page_', ''), 10) || 0;
@@ -191,4 +228,6 @@ module.exports = {
   PANEL_CHANNEL_NAME,
   PANEL_TRIGGER,
   SOUNDS_PER_PAGE,
+  BUTTONS_PER_ROW,
+  padLabel,
 };
