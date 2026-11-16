@@ -102,23 +102,20 @@ assert.strictEqual(PANEL_TRIGGER.test('!panel'), true);
 assert.strictEqual(PANEL_TRIGGER.test('!panel now'), true);
 assert.strictEqual(PANEL_TRIGGER.test('panel'), false);
 assert.strictEqual(PANEL_TRIGGER.test('!panelku'), false);
-assert.strictEqual(SOUNDS_PER_PAGE, 12, 'Launchpad memuat 12 sound per halaman (3 baris x 4 tombol)');
+assert.strictEqual(SOUNDS_PER_PAGE, 12, 'Soundboard memuat 12 sound per halaman (3 baris x 4 tombol)');
 
 // Page 0 (Halaman 1)
 const page0 = createPanelPayload(0);
 assert.ok(page0.embeds && page0.embeds.length === 1);
-assert.strictEqual(page0.embeds[0].data.title, '🎮 PT MABAR - Soundboard Launchpad');
+assert.strictEqual(page0.embeds[0].data.title, '🎮 PT MABAR - Soundboard');
+assert.strictEqual(page0.embeds[0].data.description, 'Klik tombol di bawah untuk langsung memutar sound di Voice Channel.');
 assert.ok(page0.embeds[0].data.footer.text.includes('Halaman 1/2'));
 assert.strictEqual(page0.components.length, 4, 'Harus ada 4 baris (3 baris sound + 1 baris navigasi/kontrol)');
-
-// Verifikasi tombol baris per baris tepat 4 tombol agar sejajar simetris
-for (const row of page0.components) {
-  assert.strictEqual(row.components.length, 4, 'Setiap baris tepat 4 tombol agar simetris sejajar');
-}
 
 const page0Buttons = page0.components.flatMap(row => row.components);
 const soundBtnsPage0 = page0Buttons.filter(b => b.data.custom_id.startsWith('sb_play_'));
 assert.strictEqual(soundBtnsPage0.length, 12, 'Halaman 1 harus memuat 12 sound');
+assert.strictEqual(soundBtnsPage0[0].data.label, 'adit', 'Label harus bersih tanpa karakter braille atau spasi aneh');
 
 const prevBtnPage0 = page0Buttons.find(b => b.data.label === '◀ Prev');
 const nextBtnPage0 = page0Buttons.find(b => b.data.label === 'Next ▶');
@@ -128,21 +125,12 @@ assert.strictEqual(Boolean(nextBtnPage0.data.disabled), false, 'Next harus enabl
 // Page 1 (Halaman 2)
 const page1 = createPanelPayload(1);
 assert.ok(page1.embeds[0].data.footer.text.includes('Halaman 2/2'));
+assert.strictEqual(page1.embeds[0].data.title, '🎮 PT MABAR - Soundboard');
 
-for (const row of page1.components) {
-  assert.strictEqual(row.components.length, 4, 'Setiap baris di halaman 2 tepat 4 tombol (termasuk slot kosong)');
-}
 const page1Buttons = page1.components.flatMap(row => row.components);
 const soundBtnsPage1 = page1Buttons.filter(b => b.data.custom_id.startsWith('sb_play_'));
 const expectedRemaining = sounds.length - 12;
 assert.strictEqual(soundBtnsPage1.length, expectedRemaining, `Halaman 2 harus memuat sisa ${expectedRemaining} sound`);
-
-const emptyBtnsPage1 = page1Buttons.filter(b => b.data.custom_id.startsWith('sb_empty_'));
-const expectedEmpty = (4 - (expectedRemaining % 4)) % 4;
-assert.strictEqual(emptyBtnsPage1.length, expectedEmpty, 'Slot kosong di baris terakhir harus diisi placeholder agar sejajar 4 kolom');
-if (emptyBtnsPage1.length > 0) {
-  assert.strictEqual(emptyBtnsPage1[0].data.disabled, true);
-}
 
 const nextBtnPage1 = page1Buttons.find(b => b.data.label === 'Next ▶');
 assert.strictEqual(Boolean(nextBtnPage1.data.disabled), true, 'Next harus disabled di halaman terakhir');
@@ -150,6 +138,6 @@ assert.strictEqual(Boolean(nextBtnPage1.data.disabled), true, 'Next harus disabl
 // Verifikasi tombol Stop & Refresh
 assert.ok(page0Buttons.find(b => b.data.custom_id === 'sb_ctrl_stop'), 'Tombol Stop harus ada');
 assert.ok(page0Buttons.find(b => b.data.custom_id.startsWith('sb_ctrl_refresh')), 'Tombol Refresh harus ada');
-console.log('✔ Soundboard Launchpad (3x4 responsive grid, pagination, channel restriction, override audio) valid');
+console.log('✔ Simple Soundboard Panel (Clean embed, 4 buttons/row, pagination, channel flexibility, override audio) valid');
 
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
