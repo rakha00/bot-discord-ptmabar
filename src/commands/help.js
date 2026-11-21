@@ -17,7 +17,6 @@ function createHelpEmbed() {
       '• `!sb <nama> [repeat]` — Putar suara soundboard',
       '• `!sb list` — Tampilkan daftar suara soundboard',
       '• `!pt stop` — Hentikan suara dan bersihkan antrean',
-      '• `!panel` — Tampilkan interactive control panel (khusus di #bot-ptmabar)',
       '• `!help` — Tampilkan pesan bantuan ini',
     ].join('\n'));
 }

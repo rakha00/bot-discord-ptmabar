@@ -4,7 +4,6 @@ const donasi = require('./src/commands/donasi');
 const help = require('./src/commands/help');
 const soundboard = require('./src/commands/soundboard');
 const control = require('./src/commands/control');
-const panel = require('./src/commands/panel');
 const play = require('./src/commands/play');
 
 const client = new Client({
@@ -19,7 +18,6 @@ const client = new Client({
 const slashCommands = [
   donasi.donasiSlashCommand,
   help.helpSlashCommand,
-  panel.panelSlashCommand,
   play.playSlashCommand,
   play.skipSlashCommand,
   play.queueSlashCommand,
@@ -60,19 +58,13 @@ client.on('messageCreate', async (message) => {
   // Cek perintah !play / !skip (musik YouTube)
   if (await play.handleMessage(message)) return;
 
-  // Cek perintah !panel (interactive control panel di #bot-ptmabar)
-  if (await panel.handleMessage(message)) return;
-
   // Cek perintah !help
   if (await help.handleMessage(message)) return;
 });
 
 // Event: Menangani perintah slash (/) dan interaksi UI komponen
 client.on('interactionCreate', async (interaction) => {
-  // Tangani interaksi panel (slash /panel, tombol, dropdown select, modal)
-  if (await panel.handleInteraction(interaction)) return;
-
-  // Tangani interaksi slash command musik (/play, /skip)
+  // Tangani interaksi slash command musik (/play, /skip, /queue)
   if (await play.handleInteraction(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
