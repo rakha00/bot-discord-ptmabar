@@ -152,17 +152,21 @@ console.log('✔ Simple Soundboard Panel (4x5 sound grid + bottom row controls, 
 const {
   playSlashCommand,
   skipSlashCommand,
+  queueSlashCommand,
   createNowPlayingEmbed,
+  createQueueEmbed,
   PLAY_TRIGGER,
   SKIP_TRIGGER,
+  QUEUE_TRIGGER,
 } = require('./src/commands/play');
 const { searchYouTube } = require('./src/youtube');
-const { playMusic, skipAudio } = require('./src/voiceManager');
+const { playMusic, skipAudio, getQueue } = require('./src/voiceManager');
 
 assert.strictEqual(playSlashCommand.name, 'play');
 assert.strictEqual(playSlashCommand.options.length, 1);
 assert.strictEqual(playSlashCommand.options[0].name, 'query');
 assert.strictEqual(skipSlashCommand.name, 'skip');
+assert.strictEqual(queueSlashCommand.name, 'queue');
 
 assert.strictEqual(PLAY_TRIGGER.test('!play rick roll'), true);
 assert.strictEqual(PLAY_TRIGGER.test('!p dj viral'), true);
@@ -173,6 +177,11 @@ assert.strictEqual(SKIP_TRIGGER.test('!skip'), true);
 assert.strictEqual(SKIP_TRIGGER.test('!skip now'), true);
 assert.strictEqual(SKIP_TRIGGER.test('skip'), false);
 
+assert.strictEqual(QUEUE_TRIGGER.test('!queue'), true);
+assert.strictEqual(QUEUE_TRIGGER.test('!q'), true);
+assert.strictEqual(QUEUE_TRIGGER.test('!queue info'), true);
+assert.strictEqual(QUEUE_TRIGGER.test('queue'), false);
+
 const mockVideo = { title: 'Lagu Santai', url: 'https://youtube.com/watch?v=123', duration: '3:45' };
 const nowPlayingEmbed = createNowPlayingEmbed(mockVideo, 1, true);
 assert.strictEqual(nowPlayingEmbed.data.title, '▶️ Sedang Memutar Musik');
@@ -182,9 +191,25 @@ const queuedEmbed = createNowPlayingEmbed(mockVideo, 3, false);
 assert.strictEqual(queuedEmbed.data.title, '📋 Ditambahkan ke Antrean');
 assert.ok(queuedEmbed.data.description.includes('Posisi antrean: #3'));
 
+// Test queue embed empty & populated
+const emptyQueueEmbed = createQueueEmbed({ isPlaying: false, current: null, queue: [] });
+assert.strictEqual(emptyQueueEmbed.data.title, '📋 Antrean Musik Kosong');
+
+const filledQueueEmbed = createQueueEmbed({
+  isPlaying: true,
+  current: mockVideo,
+  queue: [
+    { title: 'Lagu Kedua', url: 'https://youtube.com/watch?v=456', duration: '4:10' }
+  ]
+});
+assert.strictEqual(filledQueueEmbed.data.title, '📋 Antrean Musik YouTube');
+assert.ok(filledQueueEmbed.data.description.includes('Lagu Santai'));
+assert.ok(filledQueueEmbed.data.description.includes('Lagu Kedua'));
+
 assert.strictEqual(typeof searchYouTube, 'function');
 assert.strictEqual(typeof playMusic, 'function');
 assert.strictEqual(typeof skipAudio, 'function');
-console.log('✔ YouTube Music playback, skip logic & embed schemas valid');
+assert.strictEqual(typeof getQueue, 'function');
+console.log('✔ YouTube Music playback, queue, skip logic & embed schemas valid');
 
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');

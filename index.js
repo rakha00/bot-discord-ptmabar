@@ -22,6 +22,7 @@ const slashCommands = [
   panel.panelSlashCommand,
   play.playSlashCommand,
   play.skipSlashCommand,
+  play.queueSlashCommand,
 ];
 
 // Event: Saat bot berhasil login

@@ -1,9 +1,11 @@
+const path = require('node:path');
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { searchYouTube } = require('../youtube');
-const { playMusic, skipAudio } = require('../voiceManager');
+const { playMusic, skipAudio, getQueue } = require('../voiceManager');
 
 const PLAY_TRIGGER = /^!(?:play|p)(?:\s|$)/i;
 const SKIP_TRIGGER = /^!skip(?:\s|$)/i;
+const QUEUE_TRIGGER = /^!(?:queue|q)(?:\s|$)/i;
 
 const playSlashCommand = new SlashCommandBuilder()
   .setName('play')
@@ -19,6 +21,10 @@ const skipSlashCommand = new SlashCommandBuilder()
   .setName('skip')
   .setDescription('Lewati lagu yang sedang diputar');
 
+const queueSlashCommand = new SlashCommandBuilder()
+  .setName('queue')
+  .setDescription('Lihat daftar antrean lagu yang sedang diputar');
+
 function createNowPlayingEmbed(video, position, isPlayingNow) {
   if (isPlayingNow) {
     return new EmbedBuilder()
@@ -31,6 +37,44 @@ function createNowPlayingEmbed(video, position, isPlayingNow) {
     .setColor(0xF1C40F)
     .setTitle('📋 Ditambahkan ke Antrean')
     .setDescription(`**[${video.title}](${video.url})**\n⏱️ Durasi: \`${video.duration}\` • Posisi antrean: #${position}`);
+}
+
+function formatQueueItem(item) {
+  const title = item.title || (item.type === 'file' ? path.basename(item.path, path.extname(item.path)) : 'Audio TTS');
+  const dur = item.duration ? ` (\`${item.duration}\`)` : '';
+  return item.url ? `[${title}](${item.url})${dur}` : `\`${title}\`${dur}`;
+}
+
+function createQueueEmbed(queueData) {
+  const { current, queue } = queueData;
+  if (!current && (!queue || queue.length === 0)) {
+    return new EmbedBuilder()
+      .setColor(0xF1C40F)
+      .setTitle('📋 Antrean Musik Kosong')
+      .setDescription('Tidak ada lagu yang sedang diputar atau mengantre.\nGunakan `!play <judul/url>` untuk memutar lagu.');
+  }
+
+  const lines = [];
+  if (current) {
+    lines.push(`**▶️ Sedang Diputar:**\n${formatQueueItem(current)}\n`);
+  }
+
+  if (queue && queue.length > 0) {
+    lines.push('**Daftar Antrean Berikutnya:**');
+    const displayItems = queue.slice(0, 10);
+    displayItems.forEach((item, index) => {
+      lines.push(`\`${index + 1}.\` ${formatQueueItem(item)}`);
+    });
+
+    if (queue.length > 10) {
+      lines.push(`\n*...dan ${queue.length - 10} lagu lainnya.*`);
+    }
+  }
+
+  return new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle('📋 Antrean Musik YouTube')
+    .setDescription(lines.join('\n'));
 }
 
 async function handleMessage(message) {
@@ -55,7 +99,15 @@ async function handleMessage(message) {
     return true;
   }
 
-  // 2. Perintah !play atau !p
+  // 2. Perintah !queue atau !q
+  if (QUEUE_TRIGGER.test(content)) {
+    const queueData = getQueue(message.guild.id);
+    const embed = createQueueEmbed(queueData);
+    await message.channel.send({ embeds: [embed] }).catch(() => {});
+    return true;
+  }
+
+  // 3. Perintah !play atau !p
   if (!PLAY_TRIGGER.test(content)) return false;
 
   const query = content.replace(/^!(?:play|p)\s*/i, '').trim();
@@ -143,15 +195,26 @@ async function handleInteraction(interaction) {
     return true;
   }
 
+  // 3. Slash Command /queue
+  if (interaction.commandName === 'queue') {
+    const queueData = getQueue(interaction.guild.id);
+    const embed = createQueueEmbed(queueData);
+    await interaction.reply({ embeds: [embed] });
+    return true;
+  }
+
   return false;
 }
 
 module.exports = {
   playSlashCommand,
   skipSlashCommand,
+  queueSlashCommand,
   handleMessage,
   handleInteraction,
   createNowPlayingEmbed,
+  createQueueEmbed,
   PLAY_TRIGGER,
   SKIP_TRIGGER,
+  QUEUE_TRIGGER,
 };

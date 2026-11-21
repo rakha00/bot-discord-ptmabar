@@ -17,7 +17,7 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 menit jika idle tidak ada donasi
 const EMPTY_TIMEOUT_MS = 5 * 60 * 1000; // 5 menit jika voice channel kosong
 const ALERT_PATH = path.join(__dirname, '..', 'assets', 'alert.mp3');
 
-// Cache per-guild: { player, queue, isPlaying, idleTimer, emptyTimer, currentProc }
+// Cache per-guild: { player, queue, current, isPlaying, idleTimer, emptyTimer, currentProc }
 const players = new Map();
 
 function getGuildData(guildId) {
@@ -27,6 +27,7 @@ function getGuildData(guildId) {
     guildData = {
       player,
       queue: [],
+      current: null,
       isPlaying: false,
       idleTimer: null,
       emptyTimer: null,
@@ -124,12 +125,14 @@ async function playNext(guildId) {
 
   if (guildData.queue.length === 0) {
     guildData.isPlaying = false;
+    guildData.current = null;
     startIdleTimer(guildId);
     return;
   }
 
   guildData.isPlaying = true;
   const nextItem = guildData.queue.shift();
+  guildData.current = nextItem;
 
   try {
     let resource;
@@ -239,6 +242,7 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1, override = tru
     }
     // Override: Kosongkan antrean sebelumnya dan hentikan audio yang sedang berjalan
     guildData.queue = [];
+    guildData.current = null;
     for (let i = 0; i < times; i++) {
       guildData.queue.push({ type: 'file', path: filePath });
     }
@@ -313,10 +317,21 @@ function stopAudio(guildId) {
   }
 
   guildData.queue = [];
+  guildData.current = null;
   guildData.isPlaying = false;
   guildData.player.stop(true);
   startIdleTimer(guildId);
   return true;
+}
+
+function getQueue(guildId) {
+  const guildData = players.get(guildId);
+  if (!guildData) return { isPlaying: false, current: null, queue: [] };
+  return {
+    isPlaying: guildData.isPlaying,
+    current: guildData.current || null,
+    queue: [...guildData.queue],
+  };
 }
 
 module.exports = {
@@ -325,6 +340,7 @@ module.exports = {
   playMusic,
   skipAudio,
   stopAudio,
+  getQueue,
   checkChannelOccupancy,
   IDLE_TIMEOUT_MS,
   EMPTY_TIMEOUT_MS,

@@ -12,6 +12,7 @@ function createHelpEmbed() {
       '**Daftar Command:**',
       '• `!play <judul/url>` — Putar musik dari YouTube di voice channel',
       '• `!skip` — Lewati lagu yang sedang diputar',
+      '• `!queue` / `!q` — Tampilkan daftar antrean musik yang sedang diputar',
       '• `!donasi <nominal> <nama> <pesan>` — Putar suara donasi di voice channel',
       '• `!sb <nama> [repeat]` — Putar suara soundboard',
       '• `!sb list` — Tampilkan daftar suara soundboard',
