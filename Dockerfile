@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
-# Install FFmpeg (wajib untuk pemutaran audio di voice channel Discord)
-RUN apk add --no-cache ffmpeg
+# Install FFmpeg & yt-dlp (wajib untuk audio voice channel & streaming YouTube)
+RUN apk add --no-cache ffmpeg yt-dlp
 
 WORKDIR /app
 

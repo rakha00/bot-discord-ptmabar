@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -16,7 +17,7 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 menit jika idle tidak ada donasi
 const EMPTY_TIMEOUT_MS = 5 * 60 * 1000; // 5 menit jika voice channel kosong
 const ALERT_PATH = path.join(__dirname, '..', 'assets', 'alert.mp3');
 
-// Cache per-guild: { player, queue, isPlaying, idleTimer, emptyTimer }
+// Cache per-guild: { player, queue, isPlaying, idleTimer, emptyTimer, currentProc }
 const players = new Map();
 
 function getGuildData(guildId) {
@@ -29,9 +30,14 @@ function getGuildData(guildId) {
       isPlaying: false,
       idleTimer: null,
       emptyTimer: null,
+      currentProc: null,
     };
 
     player.on(AudioPlayerStatus.Idle, () => {
+      if (guildData.currentProc) {
+        guildData.currentProc.kill();
+        guildData.currentProc = null;
+      }
       playNext(guildId);
     });
 
@@ -131,6 +137,21 @@ async function playNext(guildId) {
       resource = await getAudioResource(nextItem);
     } else if (nextItem?.type === 'file') {
       resource = createAudioResource(nextItem.path);
+    } else if (nextItem?.type === 'youtube') {
+      if (guildData.currentProc) {
+        guildData.currentProc.kill();
+        guildData.currentProc = null;
+      }
+      const proc = spawn('yt-dlp', [
+        '-f', 'bestaudio',
+        '--no-playlist',
+        '--no-warnings',
+        '-o', '-',
+        nextItem.url,
+      ]);
+      guildData.currentProc = proc;
+      proc.on('error', (err) => console.error('[yt-dlp Stream Error]:', err.message));
+      resource = createAudioResource(proc.stdout);
     }
     if (resource) {
       guildData.player.play(resource);
@@ -212,6 +233,10 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1, override = tru
   const times = Math.min(Math.max(parseInt(repeat, 10) || 1, 1), 10);
 
   if (override) {
+    if (guildData.currentProc) {
+      guildData.currentProc.kill();
+      guildData.currentProc = null;
+    }
     // Override: Kosongkan antrean sebelumnya dan hentikan audio yang sedang berjalan
     guildData.queue = [];
     for (let i = 0; i < times; i++) {
@@ -236,9 +261,56 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1, override = tru
   checkChannelOccupancy(voiceChannel.guild);
 }
 
+async function playMusic(voiceChannel, videoInfo) {
+  const connection = await getOrCreateConnection(voiceChannel);
+  const guildData = getGuildData(voiceChannel.guild.id);
+  clearIdleTimer(voiceChannel.guild.id);
+
+  connection.subscribe(guildData.player);
+
+  const item = {
+    type: 'youtube',
+    title: videoInfo.title,
+    url: videoInfo.url,
+    duration: videoInfo.duration,
+  };
+
+  const isAlreadyPlaying = guildData.isPlaying;
+  guildData.queue.push(item);
+
+  if (!isAlreadyPlaying) {
+    playNext(voiceChannel.guild.id);
+  }
+
+  checkChannelOccupancy(voiceChannel.guild);
+
+  return {
+    isPlayingNow: !isAlreadyPlaying,
+    position: isAlreadyPlaying ? guildData.queue.length : 1,
+  };
+}
+
+function skipAudio(guildId) {
+  const guildData = players.get(guildId);
+  if (!guildData) return false;
+
+  if (guildData.currentProc) {
+    guildData.currentProc.kill();
+    guildData.currentProc = null;
+  }
+
+  guildData.player.stop(true);
+  return true;
+}
+
 function stopAudio(guildId) {
   const guildData = players.get(guildId);
   if (!guildData) return false;
+
+  if (guildData.currentProc) {
+    guildData.currentProc.kill();
+    guildData.currentProc = null;
+  }
 
   guildData.queue = [];
   guildData.isPlaying = false;
@@ -250,6 +322,8 @@ function stopAudio(guildId) {
 module.exports = {
   playDonation,
   playSoundboard,
+  playMusic,
+  skipAudio,
   stopAudio,
   checkChannelOccupancy,
   IDLE_TIMEOUT_MS,

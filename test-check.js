@@ -148,4 +148,43 @@ const nextBtnPage1 = page1.components[1].components.find(b => b.data.label === '
 assert.strictEqual(Boolean(nextBtnPage1.data.disabled), true, 'Next harus disabled di halaman terakhir');
 console.log('✔ Simple Soundboard Panel (4x5 sound grid + bottom row controls, clean embed, voice switch, channel lock) valid');
 
+// 7. Test YouTube Music Commands & Helpers
+const {
+  playSlashCommand,
+  skipSlashCommand,
+  createNowPlayingEmbed,
+  PLAY_TRIGGER,
+  SKIP_TRIGGER,
+} = require('./src/commands/play');
+const { searchYouTube } = require('./src/youtube');
+const { playMusic, skipAudio } = require('./src/voiceManager');
+
+assert.strictEqual(playSlashCommand.name, 'play');
+assert.strictEqual(playSlashCommand.options.length, 1);
+assert.strictEqual(playSlashCommand.options[0].name, 'query');
+assert.strictEqual(skipSlashCommand.name, 'skip');
+
+assert.strictEqual(PLAY_TRIGGER.test('!play rick roll'), true);
+assert.strictEqual(PLAY_TRIGGER.test('!p dj viral'), true);
+assert.strictEqual(PLAY_TRIGGER.test('!play'), true);
+assert.strictEqual(PLAY_TRIGGER.test('play lagu'), false);
+
+assert.strictEqual(SKIP_TRIGGER.test('!skip'), true);
+assert.strictEqual(SKIP_TRIGGER.test('!skip now'), true);
+assert.strictEqual(SKIP_TRIGGER.test('skip'), false);
+
+const mockVideo = { title: 'Lagu Santai', url: 'https://youtube.com/watch?v=123', duration: '3:45' };
+const nowPlayingEmbed = createNowPlayingEmbed(mockVideo, 1, true);
+assert.strictEqual(nowPlayingEmbed.data.title, '▶️ Sedang Memutar Musik');
+assert.ok(nowPlayingEmbed.data.description.includes('Lagu Santai'));
+
+const queuedEmbed = createNowPlayingEmbed(mockVideo, 3, false);
+assert.strictEqual(queuedEmbed.data.title, '📋 Ditambahkan ke Antrean');
+assert.ok(queuedEmbed.data.description.includes('Posisi antrean: #3'));
+
+assert.strictEqual(typeof searchYouTube, 'function');
+assert.strictEqual(typeof playMusic, 'function');
+assert.strictEqual(typeof skipAudio, 'function');
+console.log('✔ YouTube Music playback, skip logic & embed schemas valid');
+
 console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');

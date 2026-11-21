@@ -10,6 +10,8 @@ function createHelpEmbed() {
     .setTitle('📖 Bantuan Bot PT Mabar')
     .setDescription([
       '**Daftar Command:**',
+      '• `!play <judul/url>` — Putar musik dari YouTube di voice channel',
+      '• `!skip` — Lewati lagu yang sedang diputar',
       '• `!donasi <nominal> <nama> <pesan>` — Putar suara donasi di voice channel',
       '• `!sb <nama> [repeat]` — Putar suara soundboard',
       '• `!sb list` — Tampilkan daftar suara soundboard',

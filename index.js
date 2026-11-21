@@ -5,6 +5,7 @@ const help = require('./src/commands/help');
 const soundboard = require('./src/commands/soundboard');
 const control = require('./src/commands/control');
 const panel = require('./src/commands/panel');
+const play = require('./src/commands/play');
 
 const client = new Client({
   intents: [
@@ -19,6 +20,8 @@ const slashCommands = [
   donasi.donasiSlashCommand,
   help.helpSlashCommand,
   panel.panelSlashCommand,
+  play.playSlashCommand,
+  play.skipSlashCommand,
 ];
 
 // Event: Saat bot berhasil login
@@ -53,6 +56,9 @@ client.on('messageCreate', async (message) => {
   // Cek perintah !sb (soundboard)
   if (await soundboard.handleMessage(message)) return;
 
+  // Cek perintah !play / !skip (musik YouTube)
+  if (await play.handleMessage(message)) return;
+
   // Cek perintah !panel (interactive control panel di #bot-ptmabar)
   if (await panel.handleMessage(message)) return;
 
@@ -64,6 +70,9 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
   // Tangani interaksi panel (slash /panel, tombol, dropdown select, modal)
   if (await panel.handleInteraction(interaction)) return;
+
+  // Tangani interaksi slash command musik (/play, /skip)
+  if (await play.handleInteraction(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
 
