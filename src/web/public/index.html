@@ -73,15 +73,15 @@
     .subline code { font-family: var(--mono); color: var(--text); white-space: nowrap; }
 
     /* Upload panel (shown once a file is picked or dropped) */
-    .upload { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); margin-bottom: var(--gap);
-      display: grid; grid-template-columns: 1fr auto; gap: 16px 24px; align-items: end; }
+    .upload { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); margin-bottom: var(--gap); }
+    .upload-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; }
     .upload[hidden] { display: none; }
     .upload label { display: block; font-weight: 500; margin-bottom: 8px; }
     .field { display: flex; align-items: center; height: 40px; background: var(--ground); border: 1px solid var(--control); border-radius: 10px; padding: 0 12px; }
     .field:focus-within { border-color: var(--text); }
     .field .prefix { font-family: var(--mono); color: var(--faint); margin-right: 6px; }
     .field input { flex: 1; background: none; border: 0; outline: none; font-family: var(--mono); min-width: 0; }
-    .file-meta { color: var(--muted); margin-top: 8px; }
+    .file-meta { color: var(--muted); }
     .upload-actions { display: flex; gap: 8px; }
 
     /* Toolbar */
@@ -126,6 +126,18 @@
     .drop { position: fixed; inset: 12px; border: 2px dashed var(--text); border-radius: var(--radius-card); background: var(--scrim);
       display: none; place-items: center; z-index: 50; font-size: 16px; font-weight: 500; pointer-events: none; }
     body.dragging .drop { display: grid; }
+
+    /* Confirm / rename dialog; the dimmed backdrop separates it, no shadow needed */
+    .ask { margin: auto; width: min(400px, calc(100% - 32px)); border: 0; border-radius: var(--radius-card); padding: 24px;
+      background: var(--surface); color: var(--text); }
+    .ask::backdrop { background: rgba(0,0,0,.45); }
+    .ask-title { font-size: 16px; line-height: 24px; font-weight: 600; }
+    .ask-msg { color: var(--muted); margin-top: 4px; }
+    .ask .field { margin-top: 16px; }
+    .ask .field[hidden] { display: none; }
+    .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+    .btn-danger { background: var(--negative); color: var(--ground); border-color: var(--negative); }
+    .btn-danger:hover { opacity: .9; background: var(--negative); }
 
     /* Theme switch: sun and moon (Lucide), the knob slides over the active one */
     .theme-switch { position: relative; flex: none; width: 60px; height: 32px; border: 0; border-radius: 999px; background: var(--raised);
@@ -179,7 +191,7 @@
       .row .col-dur, .row .col-size { display: none; }
       .sub-meta { display: block; }
       .actions { grid-column: 2 / -1; justify-content: flex-start; margin-left: -8px; }
-      .upload { grid-template-columns: 1fr; }
+      .upload-foot { flex-direction: column; align-items: stretch; }
       .upload-actions .btn { flex: 1; justify-content: center; height: 44px; }
     }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -244,14 +256,14 @@
     <input type="file" id="file-input" accept="audio/mpeg,.mp3" hidden onchange="onFileSelected(this.files[0])" />
 
     <form class="upload" id="upload-panel" hidden onsubmit="event.preventDefault(); startUpload()">
-      <div>
-        <label for="sound-name-input">Nama command</label>
-        <div class="field"><span class="prefix">!sb</span><input type="text" id="sound-name-input" placeholder="nama" autocomplete="off" /></div>
+      <label for="sound-name-input">Nama command</label>
+      <div class="field"><span class="prefix">!sb</span><input type="text" id="sound-name-input" placeholder="nama" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="keepName(this)" /></div>
+      <div class="upload-foot">
         <p class="file-meta" id="file-info"></p>
-      </div>
-      <div class="upload-actions">
-        <button class="btn" type="button" onclick="resetUpload()">Batal</button>
-        <button class="btn btn-primary" id="upload-btn" type="submit">Simpan sound</button>
+        <div class="upload-actions">
+          <button class="btn" type="button" onclick="resetUpload()">Batal</button>
+          <button class="btn btn-primary" id="upload-btn" type="submit">Simpan sound</button>
+        </div>
       </div>
     </form>
 
@@ -267,6 +279,18 @@
   </main>
 
   <div class="drop">Lepas file .mp3 untuk menambah sound</div>
+  <dialog id="ask" class="ask" aria-labelledby="ask-title">
+    <form method="dialog">
+      <h2 class="ask-title" id="ask-title"></h2>
+      <p class="ask-msg" id="ask-msg"></p>
+      <div class="field" id="ask-field" hidden><span class="prefix">!sb</span><input id="ask-input" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="keepName(this)" aria-label="Nama baru" /></div>
+      <div class="ask-actions">
+        <button class="btn" type="button" onclick="this.closest('dialog').close()">Batal</button>
+        <button class="btn btn-primary" id="ask-ok" value="ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" role="status"></div>
 
   <script>
@@ -368,14 +392,24 @@
     const fmtDate = ms => new Date(ms).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
     const rawUrl = s => `/api/raw/${encodeURIComponent(s.filename)}?pin=${encodeURIComponent(getSavedPin())}`;
 
+    // Sound names are one word: lowercase letters, digits, - and _. Spaces anywhere are dropped as they are typed.
+    const cleanName = v => v.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    function keepName(el) {
+      const v = cleanName(el.value);
+      if (v === el.value) return;
+      const caret = Math.max(0, el.selectionStart - (el.value.length - v.length));
+      el.value = v;
+      el.setSelectionRange(caret, caret);
+    }
+
     function onFileSelected(file) {
       if (!file) return;
       if (!file.name.toLowerCase().endsWith('.mp3')) return showToast('File harus berformat .mp3', true);
-      if (file.size > 10 * 1024 * 1024) return showToast('Ukuran file melebihi 10 MB', true);
+      if (file.size > 500 * 1024) return showToast(`File ${fmtKB(file.size)} KB, maksimal 500 KB`, true);
 
       selectedFile = file;
       const nameInput = document.getElementById('sound-name-input');
-      nameInput.value = file.name.replace(/\.[^/.]+$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      nameInput.value = cleanName(file.name.replace(/\.[^/.]+$/, ''));
       document.getElementById('file-info').textContent = `${file.name} · ${fmtKB(file.size)} KB`;
       document.getElementById('upload-panel').hidden = false;
       nameInput.focus();
@@ -390,9 +424,13 @@
 
     async function startUpload() {
       if (!selectedFile) return;
-      const soundName = document.getElementById('sound-name-input').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      const soundName = cleanName(document.getElementById('sound-name-input').value);
       if (!soundName) return showToast('Nama hanya boleh huruf, angka, - dan _', true);
-      if (currentSounds.some(s => s.name === soundName) && !confirm(`Sound "${soundName}" sudah ada. Timpa dengan file baru?`)) return;
+      if (currentSounds.some(s => s.name === soundName) && !await ask({
+        title: `Timpa "${soundName}"?`,
+        message: `Sound dengan nama ini sudah ada. File lama diganti dengan ${selectedFile.name}.`,
+        confirm: 'Timpa', danger: true,
+      })) return;
 
       const uploadBtn = document.getElementById('upload-btn');
       uploadBtn.disabled = true;
@@ -527,8 +565,33 @@
         .catch(() => showToast(`Command: !sb ${name}`));
     }
 
+    // Styled replacement for confirm()/prompt() on a native <dialog>.
+    // Resolves true (or the typed text when `value` is given) on confirm, null on cancel or Esc.
+    function ask({ title, message, confirm, danger = false, value = null }) {
+      const d = document.getElementById('ask');
+      const input = document.getElementById('ask-input');
+      const ok = document.getElementById('ask-ok');
+      document.getElementById('ask-title').textContent = title;
+      document.getElementById('ask-msg').textContent = message;
+      document.getElementById('ask-field').hidden = value === null;
+      input.value = value ?? '';
+      ok.textContent = confirm;
+      ok.classList.toggle('btn-danger', danger);
+      ok.classList.toggle('btn-primary', !danger);
+      d.returnValue = '';
+      d.showModal();
+      // Destructive dialogs start on Batal so a stray Enter cannot delete or overwrite.
+      if (value !== null) { input.focus(); input.select(); } else (danger ? d.querySelector('.ask-actions .btn') : ok).focus();
+      return new Promise(resolve => d.addEventListener('close',
+        () => resolve(d.returnValue === 'ok' ? (value === null ? true : input.value) : null), { once: true }));
+    }
+
     async function deleteSound(name) {
-      if (!confirm(`Hapus sound "${name}"? File-nya ikut terhapus dan !sb ${name} tidak bisa dipakai lagi.`)) return;
+      if (!await ask({
+        title: `Hapus "${name}"?`,
+        message: `File-nya ikut terhapus dan !sb ${name} tidak bisa dipakai lagi.`,
+        confirm: 'Hapus', danger: true,
+      })) return;
       try {
         const res = await fetch(`/api/sounds/${encodeURIComponent(name)}`, {
           method: 'DELETE',
@@ -548,10 +611,14 @@
     }
 
     async function renameSound(oldName) {
-      const newName = prompt(`Nama baru untuk "${oldName}":`, oldName);
-      if (!newName || newName.trim() === oldName) return;
-      const clean = newName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
-      if (!clean) return showToast('Nama hanya boleh huruf, angka, - dan _', true);
+      const newName = await ask({
+        title: 'Ganti nama sound',
+        message: `Command lama !sb ${oldName} tidak bisa dipakai lagi.`,
+        confirm: 'Simpan', value: oldName,
+      });
+      // The dialog input is already cleaned as it is typed, so an empty or unchanged name just closes.
+      const clean = cleanName(newName ?? '');
+      if (!clean || clean === oldName) return;
 
       try {
         const res = await fetch(`/api/sounds/${encodeURIComponent(oldName)}`, {

@@ -228,6 +228,15 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.strictEqual(uploadData.success, true);
       assert.strictEqual(uploadData.name, 'test_unit_sb');
 
+      // 5b. Upload over 500 KB is rejected and leaves no file
+      const resBig = await fetch(`${baseUrl}/api/upload?name=test_unit_big`, {
+        method: 'POST',
+        headers: { 'X-Pin': '280303', 'Content-Type': 'audio/mpeg' },
+        body: Buffer.alloc(500 * 1024 + 1),
+      });
+      assert.strictEqual(resBig.status, 413);
+      assert.ok(!fs.existsSync(path.join(SOUNDS_DIR, 'test_unit_big.mp3')));
+
       const createdFile = path.join(SOUNDS_DIR, 'test_unit_sb.mp3');
       assert.ok(fs.existsSync(createdFile), 'File test_unit_sb.mp3 harus terbuat di sounds/');
 
@@ -266,7 +275,20 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.strictEqual(typeof handler, 'function', 'HTTP request handler harus terdaftar');
     }
 
-    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete) valid');
+    // Sound names typed in the UI are one word: spaces anywhere are dropped, caret stays put
+    const uiSrc = fs.readFileSync(path.join(__dirname, 'src', 'web', 'public', 'index.html'), 'utf8');
+    const { cleanName, keepName } = new Function(
+      uiSrc.slice(uiSrc.indexOf('const cleanName'), uiSrc.indexOf('function onFileSelected')) + ';return { cleanName, keepName }')();
+    assert.strictEqual(cleanName(' aku'), 'aku');
+    assert.strictEqual(cleanName('aku berlutut'), 'akuberlutut');
+    assert.strictEqual(cleanName('aku '), 'aku');
+    assert.strictEqual(cleanName('Aku_Ber-Lutut2'), 'aku_ber-lutut2');
+    const el = { value: 'ak u', selectionStart: 3, setSelectionRange(p) { this.caret = p; } };
+    keepName(el);
+    assert.strictEqual(el.value, 'aku');
+    assert.strictEqual(el.caret, 2);
+
+    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names) valid');
     console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
   } finally {
     server.close();

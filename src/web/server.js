@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const SOUNDS_DIR = path.join(__dirname, '..', '..', 'sounds');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB limit
+const MAX_UPLOAD_BYTES = 500 * 1024; // 500 KB per sound
 
 function getPin() {
   return process.env.WEB_PIN || '280303';
@@ -176,6 +176,11 @@ function createWebServer() {
           return sendJson(res, 400, { error: 'Nama sound tidak valid (hanya huruf, angka, dash, dan underscore)' });
         }
 
+        // Reject early when the client declares the size; the stream check below covers the rest.
+        if (Number(req.headers['content-length']) > MAX_UPLOAD_BYTES) {
+          return sendJson(res, 413, { error: 'Ukuran file melebihi batas 500 KB' });
+        }
+
         if (!fs.existsSync(SOUNDS_DIR)) fs.mkdirSync(SOUNDS_DIR, { recursive: true });
         const targetPath = path.join(SOUNDS_DIR, `${clean}.mp3`);
         const tempPath = path.join(SOUNDS_DIR, `.${clean}_${Date.now()}.tmp`);
@@ -191,7 +196,7 @@ function createWebServer() {
             req.destroy();
             writeStream.destroy();
             if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-            return sendJson(res, 413, { error: 'Ukuran file melebihi batas 10MB' });
+            return sendJson(res, 413, { error: 'Ukuran file melebihi batas 500 KB' });
           }
         });
 
