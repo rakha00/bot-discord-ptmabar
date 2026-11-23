@@ -1,5 +1,8 @@
 const { spawn } = require('node:child_process');
 
+// YouTube's Opus track can be passed straight to Discord; anything else falls back to FFmpeg.
+const AUDIO_FORMAT = 'bestaudio[acodec=opus]/bestaudio';
+
 function searchYouTube(query) {
   return new Promise((resolve, reject) => {
     const trimmed = query.trim();
@@ -10,10 +13,13 @@ function searchYouTube(query) {
     const isUrl = /^https?:\/\//i.test(trimmed);
     const target = isUrl ? trimmed : `ytsearch1:${trimmed}`;
 
+    // One full extraction (-j) gives the title and the resolved stream URLs together. The JSON is kept
+    // on the queue item so playback starts with --load-info-json (~1 s) instead of extracting again (~7 s).
     const proc = spawn('yt-dlp', [
+      '-j',
+      '-f', AUDIO_FORMAT,
       '--no-playlist',
       '--no-warnings',
-      '--print', '%(title)s|||%(duration_string)s|||%(id)s',
       target,
     ]);
 
@@ -24,15 +30,18 @@ function searchYouTube(query) {
     proc.stderr.on('data', (d) => { stderr += d; });
 
     proc.on('close', (code) => {
-      if (code === 0 && stdout.trim()) {
-        const lines = stdout.trim().split('\n').filter(Boolean);
-        const lastLine = lines[lines.length - 1];
-        const [title, duration, id] = lastLine.split('|||');
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      let info = null;
+      try { info = JSON.parse(lines[lines.length - 1]); } catch {}
 
+      if (code === 0 && info) {
         resolve({
-          title: title || 'Unknown Title',
-          duration: duration || 'Live / Unknown',
-          url: id ? `https://www.youtube.com/watch?v=${id}` : target,
+          title: info.title || 'Unknown Title',
+          duration: info.duration_string || 'Live / Unknown',
+          url: info.id ? `https://www.youtube.com/watch?v=${info.id}` : target,
+          // ponytail: ~600 KB of JSON per queued song; strip unused keys if long queues ever matter
+          info: lines[lines.length - 1],
+          resolvedAt: Date.now(),
         });
       } else {
         reject(new Error(stderr || 'Video YouTube tidak ditemukan.'));
@@ -47,4 +56,5 @@ function searchYouTube(query) {
 
 module.exports = {
   searchYouTube,
+  AUDIO_FORMAT,
 };

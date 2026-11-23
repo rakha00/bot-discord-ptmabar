@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const {
@@ -9,8 +10,12 @@ const {
   getVoiceConnection,
   VoiceConnectionStatus,
   entersState,
+  demuxProbe,
 } = require('@discordjs/voice');
 const { splitText, getAudioResource } = require('./tts');
+const { AUDIO_FORMAT } = require('./youtube');
+
+const INFO_MAX_AGE_MS = 5 * 60 * 60 * 1000; // YouTube stream URLs expire after ~6 h
 
 // Durasi timeout auto-leave (keduanya 5 menit)
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 menit jika idle tidak ada donasi
@@ -145,16 +150,32 @@ async function playNext(guildId) {
         guildData.currentProc.kill();
         guildData.currentProc = null;
       }
-      const proc = spawn('yt-dlp', [
-        '-f', 'bestaudio',
-        '--no-playlist',
-        '--no-warnings',
-        '-o', '-',
-        nextItem.url,
-      ]);
+      // Reuse the extraction saved at search time while its stream URLs are still valid (they expire
+      // after ~6 h); otherwise extract again from the video URL.
+      let source = ['--no-playlist', nextItem.url];
+      let infoFile = null;
+      if (nextItem.info && Date.now() - nextItem.resolvedAt < INFO_MAX_AGE_MS) {
+        infoFile = path.join(os.tmpdir(), `yt-${process.pid}-${Date.now()}.json`);
+        fs.writeFileSync(infoFile, nextItem.info);
+        source = ['--load-info-json', infoFile];
+      }
+      nextItem.info = null; // free the JSON; it is used once
+
+      // An Opus (WebM) stream is passed straight to Discord by demuxProbe, skipping the FFmpeg decode
+      // and opusscript re-encode. Other formats still go through FFmpeg.
+      const proc = spawn('yt-dlp', ['-f', AUDIO_FORMAT, '--no-warnings', '-o', '-', ...source]);
       guildData.currentProc = proc;
       proc.on('error', (err) => console.error('[yt-dlp Stream Error]:', err.message));
-      resource = createAudioResource(proc.stdout);
+      if (infoFile) proc.on('close', () => fs.rm(infoFile, { force: true }, () => {}));
+      let probed;
+      try {
+        probed = await demuxProbe(proc.stdout);
+      } catch (err) {
+        if (guildData.currentProc !== proc) return; // killed by skip/stop/soundboard; they already moved on
+        throw err;
+      }
+      if (guildData.currentProc !== proc) return; // superseded while probing
+      resource = createAudioResource(probed.stream, { inputType: probed.type });
     }
     if (resource) {
       guildData.player.play(resource);
@@ -277,6 +298,8 @@ async function playMusic(voiceChannel, videoInfo) {
     title: videoInfo.title,
     url: videoInfo.url,
     duration: videoInfo.duration,
+    info: videoInfo.info,
+    resolvedAt: videoInfo.resolvedAt,
   };
 
   const isAlreadyPlaying = guildData.isPlaying;
