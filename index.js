@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const { checkChannelOccupancy } = require('./src/voiceManager');
+const { startWebServer } = require('./src/web/server');
 const donasi = require('./src/commands/donasi');
 const help = require('./src/commands/help');
 const soundboard = require('./src/commands/soundboard');
@@ -76,6 +77,9 @@ client.on('interactionCreate', async (interaction) => {
     return help.handleInteraction(interaction);
   }
 });
+
+// Start Web Soundboard Manager
+startWebServer();
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {

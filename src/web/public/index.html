@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Soundboard · PT MABAR</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22><rect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%23111%22/><g fill=%22%23f1c40f%22><rect x=%225%22 y=%229%22 width=%223%22 height=%226%22 rx=%221.5%22/><rect x=%2210.5%22 y=%225%22 width=%223%22 height=%2214%22 rx=%221.5%22/><rect x=%2216%22 y=%228%22 width=%223%22 height=%228%22 rx=%221.5%22/></g></svg>">
+  <script>
+    // Saved choice wins; otherwise follow the OS. Runs before paint so there is no flash.
+    try { document.documentElement.dataset.theme = localStorage.getItem('ptmabar_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* Theme "Langit": elevation by tone steps; the one hue (cobalt) sits on the primary action and the playing sound. */
+    :root {
+      color-scheme: light;
+      --ground: #f3f6f9; --surface: #ffffff; --raised: #eaeef2; --hover: #f8fafc;
+      --border: #e3e8ee; --rule: #edf1f5; --control: #cfd6de;
+      --text: #16202a; --muted: #55606b; --faint: #64707c;
+      --accent: #1d5fd6; --negative: #c41c29;
+      --primary: #2563eb; --on-primary: #ffffff; --primary-hover: #1d4fd0; /* same in both themes */
+      --tint: #eaeef2; --raised-hover: #dde3ea; --scrim: rgba(243,246,249,.92);
+      --mark-bg: #16202a; --mark: #f1c40f;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --ground: #121314; --surface: #1b1c1e; --raised: #2a2b2e; --hover: #17181a;
+      --border: #232427; --rule: #1f2023; --control: #45474b;
+      --text: #f2f3f5; --muted: #b4b6ba; --faint: #95989d;
+      --accent: #6ea8fe; --negative: #f0717f;
+      --tint: #26272a; --raised-hover: #37383c; --scrim: rgba(18,19,20,.9);
+      --mark-bg: #2a2b2e; --mark: #f1c40f;
+    }
+    :root {
+      --radius-card: 20px; --radius-control: 999px;
+      --gap: 14px; --pad: 22px; --control-height: 36px;
+      --font: "Inter", system-ui, sans-serif;
+      --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--ground); color: var(--text); font: 14px/20px var(--font); min-height: 100vh; }
+    button, input { font: inherit; color: inherit; }
+    .num { font-variant-numeric: tabular-nums; }
+    :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+    /* Buttons */
+    .btn { height: var(--control-height); padding: 0 16px; border-radius: var(--radius-control); border: 1px solid var(--control);
+      background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-weight: 500; white-space: nowrap;
+      transition: background .15s, transform .1s; }
+    .btn:hover { background: var(--tint); }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn:disabled { opacity: .55; cursor: default; }
+    .link { background: none; border: 0; cursor: pointer; color: var(--muted); padding: 6px 8px; border-radius: 8px; font-weight: 500; }
+    .link:hover { color: var(--text); background: var(--tint); }
+    .link.danger:hover { color: var(--negative); }
+
+    /* Top bar: mark, product, scope */
+    .topbar { height: 56px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--ground); z-index: 10; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    .topbar .wrap { height: 100%; display: flex; align-items: center; gap: 12px; }
+    .mark { width: 28px; height: 28px; flex: none; }
+    .product { font-weight: 600; }
+    .scope { color: var(--faint); }
+    .topbar .spacer { flex: 1; }
+
+    /* Title row */
+    .title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 36px 0 24px; }
+    h1, .login-title { font-size: 20px; line-height: 28px; font-weight: 600; }
+    .subline { color: var(--muted); margin-top: 4px; }
+    .subline code { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+
+    /* Upload panel (shown once a file is picked or dropped) */
+    .upload { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); margin-bottom: var(--gap);
+      display: grid; grid-template-columns: 1fr auto; gap: 16px 24px; align-items: end; }
+    .upload[hidden] { display: none; }
+    .upload label { display: block; font-weight: 500; margin-bottom: 8px; }
+    .field { display: flex; align-items: center; height: 40px; background: var(--ground); border: 1px solid var(--control); border-radius: 10px; padding: 0 12px; }
+    .field:focus-within { border-color: var(--text); }
+    .field .prefix { font-family: var(--mono); color: var(--faint); margin-right: 6px; }
+    .field input { flex: 1; background: none; border: 0; outline: none; font-family: var(--mono); min-width: 0; }
+    .file-meta { color: var(--muted); margin-top: 8px; }
+    .upload-actions { display: flex; gap: 8px; }
+
+    /* Toolbar */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+    .search { width: 300px; height: var(--control-height); display: flex; align-items: center; gap: 8px; padding: 0 14px;
+      background: var(--surface); border-radius: var(--radius-control); }
+    .search svg { flex: none; color: var(--faint); }
+    .search input { flex: 1; background: none; border: 0; outline: none; min-width: 0; }
+    .search input::placeholder, .field input::placeholder { color: var(--faint); }
+    .count { color: var(--muted); }
+
+    /* Sound table */
+    .table { width: 100%; }
+    .row { display: grid; grid-template-columns: 40px minmax(0, 1fr) 72px 150px 104px 172px; align-items: center; gap: 16px;
+      min-height: 64px; padding: 0 12px; border-bottom: 1px solid var(--rule); position: relative; }
+    .row.head { min-height: 40px; color: var(--faint); font-size: 12px; border-bottom: 0; }
+    .row:not(.head):hover { background: var(--hover); }
+    .r { text-align: right; }
+    .play { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--raised); cursor: pointer; display: grid; place-items: center;
+      transition: transform .1s, background .15s; }
+    .play:hover { background: var(--raised-hover); }
+    .play:active { transform: scale(.92); }
+    .row.playing .play { background: var(--primary); color: var(--on-primary); }
+    .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmd { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-family: var(--mono); font-size: 13px; color: var(--faint);
+      background: none; border: 0; cursor: pointer; padding: 0; }
+    .cmd:hover { color: var(--text); }
+    .size { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 6px; text-align: right; }
+    .bar { height: 2px; margin-right: 4px; background: var(--raised); border-radius: 1px; }
+    .bar i { display: block; height: 100%; background: var(--faint); border-radius: 1px; }
+    .unit { color: var(--faint); }
+    .date { color: var(--muted); }
+    .actions { display: flex; justify-content: flex-end; gap: 4px; }
+    .progress { position: absolute; left: 0; bottom: -1px; height: 2px; background: var(--primary); width: 0; }
+    .row.playing .dur { color: var(--accent); }
+    .sub-meta { display: none; color: var(--faint); font-size: 13px; }
+
+    .empty { margin-top: 8px; border: 1px dashed var(--control); border-radius: 12px; padding: 20px; color: var(--muted); text-align: center; }
+    .empty button { color: var(--text); text-decoration: underline; background: none; border: 0; cursor: pointer; }
+
+    /* Drop overlay: the whole window takes a dropped file */
+    .drop { position: fixed; inset: 12px; border: 2px dashed var(--text); border-radius: var(--radius-card); background: var(--scrim);
+      display: none; place-items: center; z-index: 50; font-size: 16px; font-weight: 500; pointer-events: none; }
+    body.dragging .drop { display: grid; }
+
+    /* Theme switch: sun and moon (Lucide), the knob slides over the active one */
+    .theme-switch { position: relative; flex: none; width: 60px; height: 32px; border: 0; border-radius: 999px; background: var(--raised);
+      cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 0 9px; color: var(--faint); }
+    .theme-switch .knob { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%; background: var(--surface);
+      transition: transform .2s; }
+    [data-theme="dark"] .theme-switch .knob { transform: translateX(28px); }
+    .theme-switch .ic { position: relative; z-index: 1; width: 14px; height: 14px; }
+    :root:not([data-theme="dark"]) .theme-switch .sun, [data-theme="dark"] .theme-switch .moon { color: var(--text); }
+
+    /* Login */
+    #login-overlay { position: fixed; inset: 0; background: var(--ground); display: grid; place-items: center; z-index: 100; padding: 16px; }
+    .login-wrap { width: 100%; max-width: 360px; display: grid; gap: 16px; justify-items: center; }
+    .login { width: 100%; background: var(--surface); border-radius: var(--radius-card); padding: 32px 28px 28px; text-align: center; }
+    .login .mark { width: 48px; height: 48px; margin-bottom: 20px; }
+    .login p { color: var(--muted); margin-top: 4px; }
+    /* The PIN is typed into a transparent text input laid over a row of dots, so the dots are always centred
+       and there is no password field for the browser's reveal button or a password manager to latch onto. */
+    .pin-box { position: relative; height: 64px; margin: 24px 0 16px; border-radius: 16px; background: var(--ground);
+      border: 1px solid var(--control); display: flex; align-items: center; justify-content: center; gap: 14px; transition: border-color .15s; }
+    .pin-box:focus-within { border-color: var(--accent); }
+    .pin-box.error { border-color: var(--negative); animation: shake .3s; }
+    .pin-box input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; font-size: 16px; cursor: text;
+      color: transparent; caret-color: transparent; }
+    .slot { width: 12px; height: 12px; border-radius: 50%; background: var(--control); transition: background .12s, transform .12s; }
+    .slot.on { background: var(--text); transform: scale(1.1); }
+    @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+    .login .btn { width: 100%; justify-content: center; height: 44px; }
+    .login .login-error { color: var(--negative); margin-top: 12px; }
+
+    /* Toast floats, so it may carry a shadow */
+    #toast { position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 16px); background: var(--raised); padding: 10px 18px;
+      border-radius: var(--radius-control); box-shadow: 0 8px 24px rgba(0,0,0,.5); opacity: 0; pointer-events: none;
+      transition: opacity .2s, transform .2s; z-index: 200; white-space: nowrap; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #toast.error { color: var(--negative); }
+
+    @media (max-width: 900px) {
+      .row { grid-template-columns: 40px minmax(0, 1fr) 64px 140px 172px; }
+      .col-date { display: none; }
+    }
+    @media (max-width: 640px) {
+      .wrap { padding: 0 16px; }
+      .scope { display: none; }
+      .title-row { padding: 24px 0 16px; flex-direction: column; align-items: stretch; }
+      .title-row .btn { justify-content: center; height: 44px; }
+      .toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
+      .search { width: 100%; height: 44px; }
+      .row.head { display: none; }
+      .row { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 0; }
+      .row .col-dur, .row .col-size { display: none; }
+      .sub-meta { display: block; }
+      .actions { grid-column: 2 / -1; justify-content: flex-start; margin-left: -8px; }
+      .upload { grid-template-columns: 1fr; }
+      .upload-actions .btn { flex: 1; justify-content: center; height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="mark" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="var(--mark-bg)"/><g fill="var(--mark)"><rect x="5" y="9" width="3" height="6" rx="1.5"/><rect x="10.5" y="5" width="3" height="14" rx="1.5"/><rect x="16" y="8" width="3" height="8" rx="1.5"/></g></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 16 16"><path d="M4.5 3h2.5v10H4.5zM9 3h2.5v10H9z" fill="currentColor"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <!-- Lucide "sun" and "moon" (ISC licence) -->
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <!-- Login -->
+  <div id="login-overlay">
+    <div class="login-wrap">
+      <form class="login" autocomplete="off" onsubmit="event.preventDefault(); submitPin()">
+        <svg class="mark" aria-hidden="true"><use href="#mark"/></svg>
+        <h2 class="login-title">Soundboard PT MABAR</h2>
+        <p>Masukkan PIN untuk mengelola sound bot.</p>
+        <div class="pin-box" id="pin-box">
+          <input type="text" id="pin-field" inputmode="numeric" maxlength="6" aria-label="PIN" autofocus
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" oninput="renderPin()" />
+          <span id="pin-slots" aria-hidden="true" style="display:contents"></span>
+        </div>
+        <button class="btn btn-primary" type="submit">Masuk</button>
+        <p id="login-error" class="login-error" hidden>PIN salah, coba lagi.</p>
+      </form>
+      <button class="theme-switch" type="button" role="switch" aria-label="Mode gelap" onclick="toggleTheme()">
+        <svg class="ic sun" aria-hidden="true"><use href="#i-sun"/></svg><svg class="ic moon" aria-hidden="true"><use href="#i-moon"/></svg><span class="knob"></span>
+      </button>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="wrap">
+      <svg class="mark" aria-hidden="true"><use href="#mark"/></svg>
+      <span class="product">PT MABAR</span>
+      <span class="scope">/ Soundboard</span>
+      <span class="spacer"></span>
+      <button class="theme-switch" type="button" role="switch" aria-label="Mode gelap" onclick="toggleTheme()">
+        <svg class="ic sun" aria-hidden="true"><use href="#i-sun"/></svg><svg class="ic moon" aria-hidden="true"><use href="#i-moon"/></svg><span class="knob"></span>
+      </button>
+      <button class="link" onclick="logout()">Keluar</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="title-row">
+      <div>
+        <h1>Soundboard</h1>
+        <p class="subline" id="subline">Memuat sound…</p>
+      </div>
+      <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">Upload sound</button>
+    </div>
+    <input type="file" id="file-input" accept="audio/mpeg,.mp3" hidden onchange="onFileSelected(this.files[0])" />
+
+    <form class="upload" id="upload-panel" hidden onsubmit="event.preventDefault(); startUpload()">
+      <div>
+        <label for="sound-name-input">Nama command</label>
+        <div class="field"><span class="prefix">!sb</span><input type="text" id="sound-name-input" placeholder="nama" autocomplete="off" /></div>
+        <p class="file-meta" id="file-info"></p>
+      </div>
+      <div class="upload-actions">
+        <button class="btn" type="button" onclick="resetUpload()">Batal</button>
+        <button class="btn btn-primary" id="upload-btn" type="submit">Simpan sound</button>
+      </div>
+    </form>
+
+    <div class="toolbar">
+      <label class="search">
+        <svg width="14" height="14" aria-hidden="true"><use href="#i-search"/></svg>
+        <input type="search" id="search-box" placeholder="Cari sound" aria-label="Cari sound" oninput="filterSounds()" />
+      </label>
+      <span class="count num" id="sound-count"></span>
+    </div>
+
+    <div class="table" id="sound-table"></div>
+  </main>
+
+  <div class="drop">Lepas file .mp3 untuk menambah sound</div>
+  <div id="toast" role="status"></div>
+
+  <script>
+    let currentSounds = [];
+    let selectedFile = null;
+    const player = new Audio();
+    let playingName = null;
+
+    function getSavedPin() {
+      return localStorage.getItem('ptmabar_pin') || '';
+    }
+
+    function showToast(msg, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.toggle('error', isError);
+      toast.classList.add('show');
+      clearTimeout(showToast.t);
+      showToast.t = setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    async function submitPin() {
+      const pin = document.getElementById('pin-field').value.trim();
+      if (!pin) return;
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin }),
+        });
+        if (res.ok) {
+          localStorage.setItem('ptmabar_pin', pin);
+          document.getElementById('login-overlay').style.display = 'none';
+          document.getElementById('login-error').hidden = true;
+          loadSounds();
+        } else {
+          document.getElementById('login-error').hidden = false;
+          const box = document.getElementById('pin-box');
+          box.classList.remove('error');
+          void box.offsetWidth; // restart the shake
+          box.classList.add('error');
+          document.getElementById('pin-field').value = '';
+          renderPin();
+        }
+      } catch (err) {
+        showToast('Gagal menghubungi server: ' + err.message, true);
+      }
+    }
+
+    // Six slots; one filled dot per typed digit.
+    function renderPin() {
+      const len = document.getElementById('pin-field').value.length;
+      if (len) document.getElementById('pin-box').classList.remove('error');
+      document.getElementById('pin-slots').innerHTML =
+        Array.from({ length: 6 }, (_, i) => `<span class="slot${i < len ? ' on' : ''}"></span>`).join('');
+    }
+
+    function setThemeLabel() {
+      const dark = String(document.documentElement.dataset.theme === 'dark');
+      document.querySelectorAll('.theme-switch').forEach(b => b.setAttribute('aria-checked', dark));
+    }
+    function toggleTheme() {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem('ptmabar_theme', next); } catch {}
+      setThemeLabel();
+    }
+
+    function logout() {
+      localStorage.removeItem('ptmabar_pin');
+      location.reload();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      setThemeLabel();
+      const savedPin = getSavedPin();
+      if (savedPin) {
+        document.getElementById('pin-field').value = savedPin;
+        submitPin();
+      }
+      renderPin();
+
+      // The whole window accepts a dropped .mp3
+      let depth = 0;
+      addEventListener('dragenter', e => { e.preventDefault(); depth++; document.body.classList.add('dragging'); });
+      addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; document.body.classList.remove('dragging'); } });
+      addEventListener('dragover', e => e.preventDefault());
+      addEventListener('drop', e => {
+        e.preventDefault();
+        depth = 0;
+        document.body.classList.remove('dragging');
+        if (e.dataTransfer.files.length > 0) onFileSelected(e.dataTransfer.files[0]);
+      });
+    });
+
+    const fmtKB = bytes => (bytes / 1024).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const fmtMB = bytes => (bytes / 1048576).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const fmtDur = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+    const fmtDate = ms => new Date(ms).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+    const rawUrl = s => `/api/raw/${encodeURIComponent(s.filename)}?pin=${encodeURIComponent(getSavedPin())}`;
+
+    function onFileSelected(file) {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith('.mp3')) return showToast('File harus berformat .mp3', true);
+      if (file.size > 10 * 1024 * 1024) return showToast('Ukuran file melebihi 10 MB', true);
+
+      selectedFile = file;
+      const nameInput = document.getElementById('sound-name-input');
+      nameInput.value = file.name.replace(/\.[^/.]+$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      document.getElementById('file-info').textContent = `${file.name} · ${fmtKB(file.size)} KB`;
+      document.getElementById('upload-panel').hidden = false;
+      nameInput.focus();
+      nameInput.select();
+    }
+
+    function resetUpload() {
+      selectedFile = null;
+      document.getElementById('file-input').value = '';
+      document.getElementById('upload-panel').hidden = true;
+    }
+
+    async function startUpload() {
+      if (!selectedFile) return;
+      const soundName = document.getElementById('sound-name-input').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (!soundName) return showToast('Nama hanya boleh huruf, angka, - dan _', true);
+      if (currentSounds.some(s => s.name === soundName) && !confirm(`Sound "${soundName}" sudah ada. Timpa dengan file baru?`)) return;
+
+      const uploadBtn = document.getElementById('upload-btn');
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Mengupload…';
+      try {
+        const res = await fetch(`/api/upload?name=${encodeURIComponent(soundName)}`, {
+          method: 'POST',
+          headers: { 'X-Pin': getSavedPin(), 'Content-Type': 'audio/mpeg' },
+          body: selectedFile,
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(`!sb ${soundName} siap dipakai`);
+          resetUpload();
+          loadSounds();
+        } else {
+          showToast(data.error || 'Gagal upload', true);
+        }
+      } catch (err) {
+        showToast('Koneksi upload gagal: ' + err.message, true);
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Simpan sound';
+      }
+    }
+
+    async function loadSounds() {
+      try {
+        const res = await fetch('/api/sounds', { headers: { 'X-Pin': getSavedPin() } });
+        if (res.status === 401) {
+          document.getElementById('login-overlay').style.display = 'grid';
+          return;
+        }
+        const data = await res.json();
+        currentSounds = data.sounds || [];
+        const total = currentSounds.reduce((a, s) => a + s.size, 0);
+        document.getElementById('subline').innerHTML =
+          `${currentSounds.length} sound · ${fmtMB(total)} MB · panggil di Discord dengan <code>!sb nama [1-10]</code>`;
+        filterSounds();
+        loadDurations();
+      } catch (err) {
+        document.getElementById('sound-table').innerHTML =
+          `<p class="empty">Daftar sound gagal dimuat. <button onclick="loadSounds()">Coba lagi</button></p>`;
+      }
+    }
+
+    // Duration comes from each file's metadata; cached on the sound object.
+    function loadDurations() {
+      currentSounds.filter(s => s.duration == null).forEach(s => {
+        const a = new Audio();
+        a.preload = 'metadata';
+        a.onloadedmetadata = () => {
+          s.duration = a.duration;
+          const cell = document.querySelector(`[data-dur="${s.name}"]`);
+          if (cell) cell.textContent = fmtDur(a.duration);
+          const sub = document.querySelector(`[data-sub="${s.name}"]`);
+          if (sub) sub.textContent = `${fmtDur(a.duration)} · ${fmtKB(s.size)} KB`;
+        };
+        a.src = rawUrl(s);
+      });
+    }
+
+    function renderSounds(sounds) {
+      const table = document.getElementById('sound-table');
+      const q = document.getElementById('search-box').value.trim();
+      document.getElementById('sound-count').textContent =
+        q ? `${sounds.length} dari ${currentSounds.length} sound` : '';
+
+      const head = `<div class="row head"><span></span><span>Sound</span><span class="r col-dur">Durasi</span><span class="r col-size">Ukuran</span><span class="r col-date">Diubah</span><span></span></div>`;
+
+      if (sounds.length === 0) {
+        table.innerHTML = head + (currentSounds.length === 0
+          ? `<p class="empty">Belum ada sound. Seret file .mp3 ke jendela ini, atau <button onclick="document.getElementById('file-input').click()">pilih file</button>.</p>`
+          : `<p class="empty">Tidak ada sound yang cocok dengan "${q.replace(/[<&"]/g, '')}".</p>`);
+        return;
+      }
+
+      const maxSize = Math.max(...currentSounds.map(s => s.size));
+      // Names are sanitized server-side to [a-z0-9_-], so they are safe in markup.
+      table.innerHTML = head + sounds.map(s => {
+        const dur = s.duration != null ? fmtDur(s.duration) : '—';
+        const playing = playingName === s.name;
+        return `
+          <div class="row${playing ? ' playing' : ''}" data-row="${s.name}">
+            <button class="play" onclick="togglePlay('${s.name}')" aria-label="${playing ? 'Jeda' : 'Putar'} ${s.name}">
+              <svg width="16" height="16" aria-hidden="true"><use href="#${playing ? 'i-pause' : 'i-play'}"/></svg>
+            </button>
+            <div style="min-width:0">
+              <div class="name">${s.name}</div>
+              <button class="cmd" onclick="copyCommand('${s.name}')" title="Salin command">!sb ${s.name}
+                <svg width="12" height="12" aria-hidden="true"><use href="#i-copy"/></svg></button>
+              <div class="sub-meta num" data-sub="${s.name}">${dur} · ${fmtKB(s.size)} KB</div>
+            </div>
+            <span class="r num dur col-dur" data-dur="${s.name}">${dur}</span>
+            <span class="size num col-size"><span class="bar"><i style="width:${(s.size / maxSize * 100).toFixed(1)}%"></i></span>${fmtKB(s.size)}<span class="unit">KB</span></span>
+            <span class="r num date col-date">${fmtDate(s.updatedAt)}</span>
+            <div class="actions">
+              <button class="link" onclick="renameSound('${s.name}')">Ganti nama</button>
+              <button class="link danger" onclick="deleteSound('${s.name}')">Hapus</button>
+            </div>
+            <span class="progress"></span>
+          </div>`;
+      }).join('');
+    }
+
+    function filterSounds() {
+      const q = document.getElementById('search-box').value.toLowerCase().trim();
+      renderSounds(q ? currentSounds.filter(s => s.name.includes(q)) : currentSounds);
+    }
+
+    // One shared preview player; the playing row carries the gold progress line.
+    function togglePlay(name) {
+      if (playingName === name) {
+        player.pause();
+        playingName = null;
+      } else {
+        player.src = rawUrl(currentSounds.find(s => s.name === name));
+        player.play().catch(() => showToast('Sound tidak bisa diputar', true));
+        playingName = name;
+      }
+      filterSounds();
+    }
+    player.ontimeupdate = () => {
+      const bar = document.querySelector(`[data-row="${playingName}"] .progress`);
+      if (bar && player.duration) bar.style.width = `${(player.currentTime / player.duration) * 100}%`;
+    };
+    player.onended = () => { playingName = null; filterSounds(); };
+
+    function copyCommand(name) {
+      navigator.clipboard.writeText(`!sb ${name}`)
+        .then(() => showToast(`!sb ${name} disalin`))
+        .catch(() => showToast(`Command: !sb ${name}`));
+    }
+
+    async function deleteSound(name) {
+      if (!confirm(`Hapus sound "${name}"? File-nya ikut terhapus dan !sb ${name} tidak bisa dipakai lagi.`)) return;
+      try {
+        const res = await fetch(`/api/sounds/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+          headers: { 'X-Pin': getSavedPin() },
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (playingName === name) { player.pause(); playingName = null; }
+          showToast(`"${name}" dihapus`);
+          loadSounds();
+        } else {
+          showToast(data.error || 'Gagal menghapus sound', true);
+        }
+      } catch (err) {
+        showToast('Koneksi gagal: ' + err.message, true);
+      }
+    }
+
+    async function renameSound(oldName) {
+      const newName = prompt(`Nama baru untuk "${oldName}":`, oldName);
+      if (!newName || newName.trim() === oldName) return;
+      const clean = newName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (!clean) return showToast('Nama hanya boleh huruf, angka, - dan _', true);
+
+      try {
+        const res = await fetch(`/api/sounds/${encodeURIComponent(oldName)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Pin': getSavedPin() },
+          body: JSON.stringify({ newName: clean }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(`Sekarang dipanggil dengan !sb ${clean}`);
+          loadSounds();
+        } else {
+          showToast(data.error || 'Gagal mengganti nama', true);
+        }
+      } catch (err) {
+        showToast('Koneksi gagal: ' + err.message, true);
+      }
+    }
+  </script>
+</body>
+</html>
