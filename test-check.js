@@ -99,7 +99,19 @@ const {
   QUEUE_TRIGGER,
 } = require('./src/commands/play');
 const { searchYouTube } = require('./src/youtube');
-const { playMusic, skipAudio, getQueue } = require('./src/voiceManager');
+const { playMusic, skipAudio, getQueue, queueWithSoundboard } = require('./src/voiceManager');
+
+// A soundboard interrupts music without wiping the queue
+{
+  const song = { type: 'youtube', title: 'Lagu Satu' };
+  const next = { type: 'youtube', title: 'Lagu Dua' };
+  const oldSb = { type: 'file', path: 'old.mp3', soundboard: true };
+  const q = queueWithSoundboard([oldSb, next], song, 'adit.mp3', 2);
+  assert.deepStrictEqual(q.map(i => i.title || i.path), ['adit.mp3', 'adit.mp3', 'Lagu Satu', 'Lagu Dua']);
+  // A soundboard over a soundboard does not requeue the old one
+  const q2 = queueWithSoundboard([song, next], oldSb, 'aduh.mp3', 1);
+  assert.deepStrictEqual(q2.map(i => i.title || i.path), ['aduh.mp3', 'Lagu Satu', 'Lagu Dua']);
+}
 
 assert.strictEqual(playSlashCommand.name, 'play');
 assert.strictEqual(playSlashCommand.options.length, 1);
@@ -161,7 +173,10 @@ assert.strictEqual(sanitizeName('ADIT_sound-01!@#$%^'), 'adit_sound-01');
 assert.strictEqual(sanitizeName('../../hack'), 'hack');
 
 (async () => {
-  const server = createWebServer();
+  // Playlists go to a scratch file, and song lookups use a fake instead of yt-dlp
+  process.env.PLAYLISTS_FILE = path.join(require('node:os').tmpdir(), `playlists_test_${process.pid}.json`);
+  const fakeSearch = async q => ({ title: `Lagu ${q}`, url: `https://www.youtube.com/watch?v=${q}`, duration: '3:00' });
+  const server = createWebServer({ search: fakeSearch });
   await new Promise(resolve => server.listen(0, resolve));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -269,6 +284,39 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       });
       assert.strictEqual(resDelete.status, 200);
       assert.ok(!fs.existsSync(renamedFile), 'File test_unit_sb_renamed.mp3 harus terhapus');
+
+      // 9. Playlists: create, add songs, list, remove a song, delete
+      const call = (url, method = 'GET', body) => fetch(`${baseUrl}${url}`, {
+        method, headers: { 'X-Pin': '280303', 'Content-Type': 'application/json' }, body: body && JSON.stringify(body),
+      });
+      assert.strictEqual((await call('/api/playlists', 'POST', { name: 'Galau Malam' })).status, 200);
+      assert.strictEqual((await call('/api/playlists', 'POST', { name: 'galaumalam' })).status, 409, 'duplicate name');
+      assert.strictEqual((await call('/api/playlists', 'POST', { name: '!!!' })).status, 400, 'invalid name');
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'satu' })).status, 200);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'dua' })).status, 200);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: '' })).status, 400, 'empty query');
+      assert.strictEqual((await call('/api/playlists/nope/songs', 'POST', { query: 'x' })).status, 404);
+      let list = (await (await call('/api/playlists')).json()).playlists;
+      assert.deepStrictEqual(list.map(p => [p.name, p.songs.map(s => s.title)]), [['galaumalam', ['Lagu satu', 'Lagu dua']]]);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs/0', 'DELETE')).status, 200);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs/5', 'DELETE')).status, 404);
+      list = (await (await call('/api/playlists')).json()).playlists;
+      assert.deepStrictEqual(list[0].songs.map(s => s.title), ['Lagu dua']);
+      assert.strictEqual((await call('/api/playlists/galaumalam', 'DELETE')).status, 200);
+      assert.deepStrictEqual((await (await call('/api/playlists')).json()).playlists, []);
+      assert.strictEqual((await fetch(`${baseUrl}/api/playlists`)).status, 401, 'playlists need the PIN');
+      fs.rmSync(process.env.PLAYLISTS_FILE, { force: true });
+
+      // !playlist command parsing and embeds
+      const { PLAYLIST_TRIGGER, createListEmbed, createPlayingEmbed } = require('./src/commands/playlist');
+      assert.ok(PLAYLIST_TRIGGER.test('!playlist list'));
+      assert.ok(PLAYLIST_TRIGGER.test('!playlist'));
+      assert.ok(!PLAYLIST_TRIGGER.test('!playlists'));
+      assert.ok(!PLAY_TRIGGER.test('!playlist galau'), '!play must not swallow !playlist');
+      assert.strictEqual(createListEmbed({}).data.title, '🎶 Belum Ada Playlist');
+      assert.ok(createListEmbed({ galau: [{}, {}] }).data.description.includes('`galau` — 2 lagu'));
+      const songs = Array.from({ length: 7 }, (_, i) => ({ title: `L${i}`, url: 'u', duration: '1:00' }));
+      assert.ok(createPlayingEmbed('galau', songs).data.description.includes('dan 2 lagu lainnya'));
     } else {
       // Mock handler verification for sandboxed mode
       const handler = server.listeners('request')[0];
@@ -304,7 +352,7 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       fs.rmSync(out, { force: true });
     }
 
-    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names, loudness) valid');
+    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names, loudness, playlists) valid');
     console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
   } finally {
     server.close();

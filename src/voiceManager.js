@@ -13,7 +13,7 @@ const {
   demuxProbe,
 } = require('@discordjs/voice');
 const { splitText, getAudioResource } = require('./tts');
-const { AUDIO_FORMAT } = require('./youtube');
+const { AUDIO_FORMAT, searchYouTube } = require('./youtube');
 
 const INFO_MAX_AGE_MS = 5 * 60 * 60 * 1000; // YouTube stream URLs expire after ~6 h
 
@@ -124,6 +124,18 @@ function checkChannelOccupancy(guild) {
   }
 }
 
+// Songs queued without a saved extraction (playlist songs) are extracted in the background while
+// the song before them plays, so they still start in about a second. One at a time.
+function prefetchNext(guildData) {
+  const next = guildData.queue.find(item => item?.type === 'youtube');
+  if (!next || next.prefetching || (next.info && Date.now() - next.resolvedAt < INFO_MAX_AGE_MS)) return;
+  next.prefetching = true;
+  searchYouTube(next.url)
+    .then(video => { next.info = video.info; next.resolvedAt = video.resolvedAt; })
+    .catch(err => console.warn('[Prefetch] Gagal menyiapkan lagu berikutnya:', err.message))
+    .finally(() => { next.prefetching = false; });
+}
+
 async function playNext(guildId) {
   const guildData = players.get(guildId);
   if (!guildData) return;
@@ -159,7 +171,6 @@ async function playNext(guildId) {
         fs.writeFileSync(infoFile, nextItem.info);
         source = ['--load-info-json', infoFile];
       }
-      nextItem.info = null; // free the JSON; it is used once
 
       // An Opus (WebM) stream is passed straight to Discord by demuxProbe, skipping the FFmpeg decode
       // and opusscript re-encode. Other formats still go through FFmpeg.
@@ -176,6 +187,7 @@ async function playNext(guildId) {
       }
       if (guildData.currentProc !== proc) return; // superseded while probing
       resource = createAudioResource(probed.stream, { inputType: probed.type });
+      prefetchNext(guildData);
     }
     if (resource) {
       guildData.player.play(resource);
@@ -247,7 +259,18 @@ async function playDonation(voiceChannel, speechText) {
   checkChannelOccupancy(voiceChannel.guild);
 }
 
-async function playSoundboard(voiceChannel, filePath, repeat = 1, override = true) {
+// A soundboard cuts in right away. It replaces any soundboard still waiting (so spamming !sb does
+// not pile up), but the music queue survives: an interrupted song goes back to the front and
+// restarts from the beginning once the soundboard is done.
+function queueWithSoundboard(queue, current, filePath, times) {
+  return [
+    ...Array.from({ length: times }, () => ({ type: 'file', path: filePath, soundboard: true })),
+    ...(current?.type === 'youtube' ? [current] : []),
+    ...queue.filter(item => !item?.soundboard),
+  ];
+}
+
+async function playSoundboard(voiceChannel, filePath, repeat = 1) {
   const connection = await getOrCreateConnection(voiceChannel);
   const guildData = getGuildData(voiceChannel.guild.id);
   clearIdleTimer(voiceChannel.guild.id);
@@ -256,31 +279,17 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1, override = tru
 
   const times = Math.min(Math.max(parseInt(repeat, 10) || 1, 1), 10);
 
-  if (override) {
-    if (guildData.currentProc) {
-      guildData.currentProc.kill();
-      guildData.currentProc = null;
-    }
-    // Override: Kosongkan antrean sebelumnya dan hentikan audio yang sedang berjalan
-    guildData.queue = [];
-    guildData.current = null;
-    for (let i = 0; i < times; i++) {
-      guildData.queue.push({ type: 'file', path: filePath });
-    }
+  if (guildData.currentProc) {
+    guildData.currentProc.kill();
+    guildData.currentProc = null;
+  }
+  guildData.queue = queueWithSoundboard(guildData.queue, guildData.current, filePath, times);
+  guildData.current = null;
 
-    if (guildData.player.state.status !== AudioPlayerStatus.Idle) {
-      guildData.player.stop(true);
-    } else {
-      playNext(voiceChannel.guild.id);
-    }
+  if (guildData.player.state.status !== AudioPlayerStatus.Idle) {
+    guildData.player.stop(true);
   } else {
-    for (let i = 0; i < times; i++) {
-      guildData.queue.push({ type: 'file', path: filePath });
-    }
-
-    if (!guildData.isPlaying) {
-      playNext(voiceChannel.guild.id);
-    }
+    playNext(voiceChannel.guild.id);
   }
 
   checkChannelOccupancy(voiceChannel.guild);
@@ -304,8 +313,9 @@ async function playMusic(voiceChannel, videoInfo) {
 
   const isAlreadyPlaying = guildData.isPlaying;
   guildData.queue.push(item);
-
-  if (!isAlreadyPlaying) {
+  if (isAlreadyPlaying) {
+    prefetchNext(guildData);
+  } else {
     playNext(voiceChannel.guild.id);
   }
 
@@ -360,6 +370,7 @@ function getQueue(guildId) {
 module.exports = {
   playDonation,
   playSoundboard,
+  queueWithSoundboard,
   playMusic,
   skipAudio,
   stopAudio,

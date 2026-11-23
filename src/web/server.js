@@ -2,6 +2,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { loadPlaylists, savePlaylists } = require('../playlists');
+const { searchYouTube } = require('../youtube');
 
 const SOUNDS_DIR = path.join(__dirname, '..', '..', 'sounds');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -104,7 +106,8 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function createWebServer() {
+// `search` resolves a song title or URL; tests pass a fake so they need no network.
+function createWebServer({ search = searchYouTube } = {}) {
   return http.createServer(async (req, res) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -311,6 +314,62 @@ function createWebServer() {
           return sendJson(res, 200, { success: true, name: newName });
         } catch {
           return sendJson(res, 400, { error: 'Format JSON tidak valid' });
+        }
+      }
+
+      // 8. Playlists: /api/playlists[/:name[/songs[/:index]]]
+      const plMatch = pathname.match(/^\/api\/playlists(?:\/([^/]+)(\/songs(?:\/(\d+))?)?)?$/);
+      if (plMatch) {
+        const playlists = loadPlaylists();
+        const name = plMatch[1] !== undefined ? sanitizeName(decodeURIComponent(plMatch[1])) : null;
+        const isSongs = plMatch[2] !== undefined;
+        const index = plMatch[3] !== undefined ? Number(plMatch[3]) : null;
+
+        if (req.method === 'GET' && name === null) {
+          const list = Object.keys(playlists).sort().map(n => ({ name: n, songs: playlists[n] }));
+          return sendJson(res, 200, { playlists: list });
+        }
+
+        if (req.method === 'POST' && name === null) {
+          let body;
+          try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
+          const newName = sanitizeName(body.name);
+          if (!newName) return sendJson(res, 400, { error: 'Nama playlist tidak valid (hanya huruf, angka, dash, underscore)' });
+          if (playlists[newName]) return sendJson(res, 409, { error: `Playlist "${newName}" sudah ada` });
+          playlists[newName] = [];
+          savePlaylists(playlists);
+          return sendJson(res, 200, { success: true, name: newName });
+        }
+
+        if (!name || !playlists[name]) return sendJson(res, 404, { error: 'Playlist tidak ditemukan' });
+
+        if (req.method === 'DELETE' && !isSongs) {
+          delete playlists[name];
+          savePlaylists(playlists);
+          return sendJson(res, 200, { success: true });
+        }
+
+        if (req.method === 'POST' && isSongs && index === null) {
+          let body;
+          try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
+          const query = String(body.query || '').trim();
+          if (!query) return sendJson(res, 400, { error: 'Isi judul lagu atau URL YouTube' });
+          let video;
+          try { video = await search(query); } catch { return sendJson(res, 404, { error: 'Lagu tidak ditemukan di YouTube' }); }
+          // Re-read: another request may have changed the file during the slow search
+          const fresh = loadPlaylists();
+          if (!fresh[name]) return sendJson(res, 404, { error: 'Playlist tidak ditemukan' });
+          const song = { title: video.title, url: video.url, duration: video.duration };
+          fresh[name].push(song);
+          savePlaylists(fresh);
+          return sendJson(res, 200, { success: true, song });
+        }
+
+        if (req.method === 'DELETE' && isSongs && index !== null) {
+          if (index >= playlists[name].length) return sendJson(res, 404, { error: 'Lagu tidak ditemukan' });
+          playlists[name].splice(index, 1);
+          savePlaylists(playlists);
+          return sendJson(res, 200, { success: true });
         }
       }
     }

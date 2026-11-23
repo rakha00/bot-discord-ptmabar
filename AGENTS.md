@@ -23,7 +23,9 @@ bot-discord/
 │   │   ├── donasi.js      # Logika !donasi & /donasi
 │   │   ├── soundboard.js  # Logika !sb <nama> [repeat] & !sb list
 │   │   ├── control.js     # Logika kontrol bot (!pt stop)
+│   │   ├── playlist.js    # Logika !playlist list & !playlist <nama>
 │   │   └── help.js        # Logika !help & /help
+│   ├── playlists.js       # Baca/tulis playlist (sounds/.playlists.json, dibuat lewat web)
 │   ├── tts.js             # Client Google TTS & pemecah teks <= 200 karakter
 │   └── voiceManager.js    # Pengelola voice connection, antrean audio, & timer auto-leave
 ├── sounds/                # Direktori file lokal .mp3 soundboard (nama file = nama command)

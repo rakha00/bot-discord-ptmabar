@@ -39,6 +39,7 @@
       --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
     body { background: var(--ground); color: var(--text); font: 14px/20px var(--font); min-height: 100vh; }
     button, input { font: inherit; color: inherit; }
     .num { font-variant-numeric: tabular-nums; }
@@ -63,7 +64,10 @@
     .topbar .wrap { height: 100%; display: flex; align-items: center; gap: 12px; }
     .mark { width: 28px; height: 28px; flex: none; }
     .product { font-weight: 600; }
-    .scope { color: var(--faint); }
+    /* Views: Soundboard and Playlist, switched by the URL hash */
+    .tabs { display: flex; gap: 4px; margin-left: 8px; }
+    .tabs a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 8px; font-weight: 500; }
+    .tabs a:hover, .tabs a[aria-current="page"] { color: var(--text); background: var(--tint); }
     .topbar .spacer { flex: 1; }
 
     /* Title row */
@@ -75,7 +79,6 @@
     /* Upload panel (shown once a file is picked or dropped) */
     .upload { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); margin-bottom: var(--gap); }
     .upload-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; }
-    .upload[hidden] { display: none; }
     .upload label { display: block; font-weight: 500; margin-bottom: 8px; }
     .field { display: flex; align-items: center; height: 40px; background: var(--ground); border: 1px solid var(--control); border-radius: 10px; padding: 0 12px; }
     .field:focus-within { border-color: var(--text); }
@@ -134,7 +137,31 @@
     .ask-title { font-size: 16px; line-height: 24px; font-weight: 600; }
     .ask-msg { color: var(--muted); margin-top: 4px; }
     .ask .field { margin-top: 16px; }
-    .ask .field[hidden] { display: none; }
+
+    /* Playlist view: list of playlists on the left, the selected one on the right */
+    .pl-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: var(--gap); align-items: start; padding-bottom: 48px; }
+    .pl-grid.solo { grid-template-columns: 1fr; }
+    .pl-list { background: var(--surface); border-radius: var(--radius-card); padding: 8px; display: grid; gap: 2px; }
+    .pl-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 10px 12px;
+      border: 0; border-radius: 12px; background: none; cursor: pointer; text-align: left; }
+    .pl-item:hover { background: var(--hover); }
+    .pl-item[aria-current="true"] { background: var(--tint); }
+    .pl-item .n { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pl-item .c { color: var(--muted); font-size: 12px; flex: none; }
+    .pl-detail { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); min-width: 0; }
+    .pl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+    .pl-head h2 { font-size: 18px; line-height: 26px; font-weight: 600; }
+    .pl-add { display: flex; gap: 8px; margin: 20px 0 16px; }
+    .pl-add .field { flex: 1; }
+    .field input.plain { font-family: var(--font); }
+    .songs { padding-left: 28px; }
+    .pl-detail .empty { margin-top: 0; }
+    .songs li { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+    .songs li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
+    .song { display: flex; align-items: center; gap: 12px; }
+    .song a { flex: 1; min-width: 0; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .song a:hover { text-decoration: underline; }
+    .song .dur { color: var(--muted); flex: none; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
     .btn-danger { background: var(--negative); color: var(--ground); border-color: var(--negative); }
     .btn-danger:hover { opacity: .9; background: var(--negative); }
@@ -181,7 +208,12 @@
     }
     @media (max-width: 640px) {
       .wrap { padding: 0 16px; }
-      .scope { display: none; }
+      .product { display: none; }
+      .tabs { margin-left: 0; gap: 0; }
+      .tabs a { padding: 6px 8px; }
+      .pl-grid { grid-template-columns: 1fr; }
+      .pl-add { flex-direction: column; }
+      .pl-add .btn { justify-content: center; height: 44px; }
       .title-row { padding: 24px 0 16px; flex-direction: column; align-items: stretch; }
       .title-row .btn { justify-content: center; height: 44px; }
       .toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
@@ -236,7 +268,10 @@
     <div class="wrap">
       <svg class="mark" aria-hidden="true"><use href="#mark"/></svg>
       <span class="product">PT MABAR</span>
-      <span class="scope">/ Soundboard</span>
+      <nav class="tabs" aria-label="Halaman">
+        <a href="#soundboard">Soundboard</a>
+        <a href="#playlist">Playlist</a>
+      </nav>
       <span class="spacer"></span>
       <button class="theme-switch" type="button" role="switch" aria-label="Mode gelap" onclick="toggleTheme()">
         <svg class="ic sun" aria-hidden="true"><use href="#i-sun"/></svg><svg class="ic moon" aria-hidden="true"><use href="#i-moon"/></svg><span class="knob"></span>
@@ -248,11 +283,15 @@
   <main class="wrap">
     <div class="title-row">
       <div>
-        <h1>Soundboard</h1>
+        <h1 id="view-title">Soundboard</h1>
         <p class="subline" id="subline">Memuat sound…</p>
+        <p class="subline" id="pl-subline" hidden>Memuat playlist…</p>
       </div>
-      <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">Upload sound</button>
+      <button class="btn btn-primary" id="sb-action" onclick="document.getElementById('file-input').click()">Upload sound</button>
+      <button class="btn btn-primary" id="pl-action" hidden onclick="createPlaylist()">Buat playlist</button>
     </div>
+
+    <section id="view-soundboard">
     <input type="file" id="file-input" accept="audio/mpeg,.mp3" hidden onchange="onFileSelected(this.files[0])" />
 
     <form class="upload" id="upload-panel" hidden onsubmit="event.preventDefault(); startUpload()">
@@ -276,6 +315,14 @@
     </div>
 
     <div class="table" id="sound-table"></div>
+    </section>
+
+    <section id="view-playlist" hidden>
+      <div class="pl-grid">
+        <div class="pl-list" id="pl-list"></div>
+        <div class="pl-detail" id="pl-detail"></div>
+      </div>
+    </section>
   </main>
 
   <div class="drop">Lepas file .mp3 untuk menambah sound</div>
@@ -283,7 +330,7 @@
     <form method="dialog">
       <h2 class="ask-title" id="ask-title"></h2>
       <p class="ask-msg" id="ask-msg"></p>
-      <div class="field" id="ask-field" hidden><span class="prefix">!sb</span><input id="ask-input" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="keepName(this)" aria-label="Nama baru" /></div>
+      <div class="field" id="ask-field" hidden><span class="prefix" id="ask-prefix">!sb</span><input id="ask-input" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="keepName(this)" aria-label="Nama baru" /></div>
       <div class="ask-actions">
         <button class="btn" type="button" onclick="this.closest('dialog').close()">Batal</button>
         <button class="btn btn-primary" id="ask-ok" value="ok">OK</button>
@@ -326,6 +373,7 @@
           document.getElementById('login-overlay').style.display = 'none';
           document.getElementById('login-error').hidden = true;
           loadSounds();
+          showView();
         } else {
           document.getElementById('login-error').hidden = false;
           const box = document.getElementById('pin-box');
@@ -375,16 +423,17 @@
 
       // The whole window accepts a dropped .mp3
       let depth = 0;
-      addEventListener('dragenter', e => { e.preventDefault(); depth++; document.body.classList.add('dragging'); });
+      addEventListener('dragenter', e => { e.preventDefault(); if (location.hash === '#playlist') return; depth++; document.body.classList.add('dragging'); });
       addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; document.body.classList.remove('dragging'); } });
       addEventListener('dragover', e => e.preventDefault());
       addEventListener('drop', e => {
         e.preventDefault();
         depth = 0;
         document.body.classList.remove('dragging');
-        if (e.dataTransfer.files.length > 0) onFileSelected(e.dataTransfer.files[0]);
+        if (location.hash !== '#playlist' && e.dataTransfer.files.length > 0) onFileSelected(e.dataTransfer.files[0]);
       });
     });
+    addEventListener('hashchange', showView);
 
     const fmtKB = bytes => (bytes / 1024).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     const fmtMB = bytes => (bytes / 1048576).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -559,21 +608,22 @@
     };
     player.onended = () => { playingName = null; filterSounds(); };
 
-    function copyCommand(name) {
-      navigator.clipboard.writeText(`!sb ${name}`)
-        .then(() => showToast(`!sb ${name} disalin`))
-        .catch(() => showToast(`Command: !sb ${name}`));
+    function copyCommand(name, prefix = '!sb') {
+      navigator.clipboard.writeText(`${prefix} ${name}`)
+        .then(() => showToast(`${prefix} ${name} disalin`))
+        .catch(() => showToast(`Command: ${prefix} ${name}`));
     }
 
     // Styled replacement for confirm()/prompt() on a native <dialog>.
     // Resolves true (or the typed text when `value` is given) on confirm, null on cancel or Esc.
-    function ask({ title, message, confirm, danger = false, value = null }) {
+    function ask({ title, message, confirm, danger = false, value = null, prefix = '!sb' }) {
       const d = document.getElementById('ask');
       const input = document.getElementById('ask-input');
       const ok = document.getElementById('ask-ok');
       document.getElementById('ask-title').textContent = title;
       document.getElementById('ask-msg').textContent = message;
       document.getElementById('ask-field').hidden = value === null;
+      document.getElementById('ask-prefix').textContent = prefix;
       input.value = value ?? '';
       ok.textContent = confirm;
       ok.classList.toggle('btn-danger', danger);
@@ -635,6 +685,154 @@
         }
       } catch (err) {
         showToast('Koneksi gagal: ' + err.message, true);
+      }
+    }
+
+    // ---- Views ----
+    function showView() {
+      const view = location.hash === '#playlist' ? 'playlist' : 'soundboard';
+      document.getElementById('view-soundboard').hidden = view !== 'soundboard';
+      document.getElementById('view-playlist').hidden = view !== 'playlist';
+      document.getElementById('view-title').textContent = view === 'playlist' ? 'Playlist' : 'Soundboard';
+      for (const id of ['subline', 'sb-action']) document.getElementById(id).hidden = view !== 'soundboard';
+      for (const id of ['pl-subline', 'pl-action']) document.getElementById(id).hidden = view !== 'playlist';
+      document.querySelectorAll('.tabs a').forEach(a => {
+        if (a.getAttribute('href') === '#' + view) a.setAttribute('aria-current', 'page');
+        else a.removeAttribute('aria-current');
+      });
+      if (view === 'playlist') loadPlaylists();
+    }
+
+    // ---- Playlists (played in Discord with !playlist <nama>) ----
+    let playlists = [];
+    let selectedPl = null;
+    const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+    async function api(url, method = 'GET', body) {
+      const res = await fetch(url, {
+        method,
+        headers: { 'X-Pin': getSavedPin(), 'Content-Type': 'application/json' },
+        body: body && JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Permintaan gagal');
+      return data;
+    }
+
+    async function loadPlaylists() {
+      try {
+        playlists = (await api('/api/playlists')).playlists;
+      } catch (err) {
+        document.getElementById('pl-detail').innerHTML =
+          `<p class="empty">Playlist gagal dimuat. <button onclick="loadPlaylists()">Coba lagi</button></p>`;
+        return;
+      }
+      if (!playlists.some(p => p.name === selectedPl)) selectedPl = playlists[0]?.name ?? null;
+      renderPlaylists();
+    }
+
+    // Playlist names are sanitized to [a-z0-9_-] by the server; song titles come from YouTube and are escaped.
+    function renderPlaylists() {
+      const songs = playlists.reduce((n, p) => n + p.songs.length, 0);
+      document.getElementById('pl-subline').innerHTML =
+        `${playlists.length} playlist · ${songs} lagu · putar di Discord dengan <code>!playlist nama</code>`;
+
+      // With no playlists the list column has nothing to show: one full-width card holds the empty state.
+      document.querySelector('.pl-grid').classList.toggle('solo', !playlists.length);
+      document.getElementById('pl-list').hidden = !playlists.length;
+      document.getElementById('pl-list').innerHTML = playlists.map(p => `
+          <button class="pl-item" aria-current="${p.name === selectedPl}" onclick="selectedPl = '${p.name}'; renderPlaylists()">
+            <span class="n">${esc(p.name)}</span><span class="c num">${p.songs.length} lagu</span>
+          </button>`).join('');
+
+      const pl = playlists.find(p => p.name === selectedPl);
+      const detail = document.getElementById('pl-detail');
+      if (!pl) {
+        detail.innerHTML = '<p class="empty">Belum ada playlist. Buat yang pertama, lalu tambahkan lagu dari judul atau URL YouTube.</p>';
+        return;
+      }
+      detail.innerHTML = `
+        <div class="pl-head">
+          <div>
+            <h2>${esc(pl.name)}</h2>
+            <button class="cmd" onclick="copyCommand('${pl.name}', '!playlist')" title="Salin command">!playlist ${esc(pl.name)}
+              <svg width="12" height="12" aria-hidden="true"><use href="#i-copy"/></svg></button>
+          </div>
+          <button class="link danger" onclick="deletePlaylist()">Hapus playlist</button>
+        </div>
+        <form class="pl-add" onsubmit="event.preventDefault(); addSong()">
+          <div class="field"><input class="plain" id="song-input" placeholder="Judul lagu atau URL YouTube" autocomplete="off" aria-label="Judul lagu atau URL YouTube" /></div>
+          <button class="btn btn-primary" id="song-btn" type="submit">Tambah lagu</button>
+        </form>
+        ${pl.songs.length
+          ? `<ol class="songs">${pl.songs.map((s, i) => `
+              <li><div class="song">
+                <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+                <span class="dur num">${esc(s.duration)}</span>
+                <button class="link danger" onclick="removeSong(${i})">Hapus</button>
+              </div></li>`).join('')}</ol>`
+          : '<p class="empty">Belum ada lagu di playlist ini.</p>'}`;
+    }
+
+    async function createPlaylist() {
+      const name = cleanName(await ask({
+        title: 'Playlist baru',
+        message: 'Nama ini dipakai di Discord untuk memutarnya.',
+        confirm: 'Buat', value: '', prefix: '!playlist',
+      }) ?? '');
+      if (!name) return;
+      try {
+        await api('/api/playlists', 'POST', { name });
+        selectedPl = name;
+        showToast(`Playlist ${name} dibuat`);
+        loadPlaylists();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    async function deletePlaylist() {
+      const pl = playlists.find(p => p.name === selectedPl);
+      if (!pl || !await ask({
+        title: `Hapus playlist "${pl.name}"?`,
+        message: `${pl.songs.length} lagu di dalamnya ikut terhapus dari playlist.`,
+        confirm: 'Hapus', danger: true,
+      })) return;
+      try {
+        await api(`/api/playlists/${encodeURIComponent(pl.name)}`, 'DELETE');
+        showToast(`Playlist ${pl.name} dihapus`);
+        loadPlaylists();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    // Adding a song asks the server to look it up on YouTube, which takes a few seconds.
+    async function addSong() {
+      const input = document.getElementById('song-input');
+      const btn = document.getElementById('song-btn');
+      const query = input.value.trim();
+      if (!query) return input.focus();
+      btn.disabled = true;
+      btn.textContent = 'Mencari…';
+      try {
+        const { song } = await api(`/api/playlists/${encodeURIComponent(selectedPl)}/songs`, 'POST', { query });
+        showToast(`Ditambahkan: ${song.title}`);
+        await loadPlaylists();
+        document.getElementById('song-input')?.focus();
+      } catch (err) {
+        showToast(err.message, true);
+        btn.disabled = false;
+        btn.textContent = 'Tambah lagu';
+      }
+    }
+
+    async function removeSong(index) {
+      try {
+        await api(`/api/playlists/${encodeURIComponent(selectedPl)}/songs/${index}`, 'DELETE');
+        loadPlaylists();
+      } catch (err) {
+        showToast(err.message, true);
       }
     }
   </script>

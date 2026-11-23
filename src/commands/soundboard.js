@@ -24,7 +24,8 @@ function findSoundFile(name) {
   if (!fs.existsSync(SOUNDS_DIR)) return null;
   const target = name.toLowerCase().trim();
   const files = fs.readdirSync(SOUNDS_DIR);
-  const match = files.find(file => path.basename(file, path.extname(file)).toLowerCase() === target);
+  // Only .mp3 files are sounds; the folder also holds .playlists.json and upload temp files.
+  const match = files.find(file => file.toLowerCase().endsWith('.mp3') && path.basename(file, path.extname(file)).toLowerCase() === target);
   return match ? path.join(SOUNDS_DIR, match) : null;
 }
 

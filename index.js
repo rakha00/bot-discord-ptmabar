@@ -6,6 +6,7 @@ const help = require('./src/commands/help');
 const soundboard = require('./src/commands/soundboard');
 const control = require('./src/commands/control');
 const play = require('./src/commands/play');
+const playlist = require('./src/commands/playlist');
 
 const client = new Client({
   intents: [
@@ -55,6 +56,9 @@ client.on('messageCreate', async (message) => {
 
   // Cek perintah !sb (soundboard)
   if (await soundboard.handleMessage(message)) return;
+
+  // Cek perintah !playlist (playlist dari web Soundboard Manager)
+  if (await playlist.handleMessage(message)) return;
 
   // Cek perintah !play / !skip (musik YouTube)
   if (await play.handleMessage(message)) return;
