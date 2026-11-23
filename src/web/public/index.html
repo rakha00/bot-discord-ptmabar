@@ -346,10 +346,6 @@
     const player = new Audio();
     let playingName = null;
 
-    function getSavedPin() {
-      return localStorage.getItem('ptmabar_pin') || '';
-    }
-
     function showToast(msg, isError = false) {
       const toast = document.getElementById('toast');
       toast.textContent = msg;
@@ -369,13 +365,14 @@
           body: JSON.stringify({ pin }),
         });
         if (res.ok) {
-          localStorage.setItem('ptmabar_pin', pin);
-          document.getElementById('login-overlay').style.display = 'none';
           document.getElementById('login-error').hidden = true;
-          loadSounds();
-          showView();
+          if (await loadSounds()) showView();
         } else {
-          document.getElementById('login-error').hidden = false;
+          // 401 wrong PIN, 429 locked out after too many tries, 503 no PIN set on the server
+          const data = await res.json().catch(() => ({}));
+          const error = document.getElementById('login-error');
+          error.textContent = res.status === 401 ? 'PIN salah, coba lagi.' : (data.error || 'Login gagal.');
+          error.hidden = false;
           const box = document.getElementById('pin-box');
           box.classList.remove('error');
           void box.offsetWidth; // restart the shake
@@ -407,18 +404,16 @@
       setThemeLabel();
     }
 
-    function logout() {
-      localStorage.removeItem('ptmabar_pin');
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' }).catch(() => {});
       location.reload();
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       setThemeLabel();
-      const savedPin = getSavedPin();
-      if (savedPin) {
-        document.getElementById('pin-field').value = savedPin;
-        submitPin();
-      }
+      try { localStorage.removeItem('ptmabar_pin'); } catch {} // drop the PIN older versions kept here
+      // The session cookie, if any, is sent automatically; without one the login screen stays up.
+      loadSounds().then(ok => { if (ok) showView(); });
       renderPin();
 
       // The whole window accepts a dropped .mp3
@@ -439,7 +434,7 @@
     const fmtMB = bytes => (bytes / 1048576).toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     const fmtDur = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
     const fmtDate = ms => new Date(ms).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-    const rawUrl = s => `/api/raw/${encodeURIComponent(s.filename)}?pin=${encodeURIComponent(getSavedPin())}`;
+    const rawUrl = s => `/api/raw/${encodeURIComponent(s.filename)}`;
 
     // Sound names are one word: lowercase letters, digits, - and _. Spaces anywhere are dropped as they are typed.
     const cleanName = v => v.toLowerCase().replace(/[^a-z0-9_-]/g, '');
@@ -487,7 +482,7 @@
       try {
         const res = await fetch(`/api/upload?name=${encodeURIComponent(soundName)}`, {
           method: 'POST',
-          headers: { 'X-Pin': getSavedPin(), 'Content-Type': 'audio/mpeg' },
+          headers: { 'Content-Type': 'audio/mpeg' },
           body: selectedFile,
         });
         const data = await res.json();
@@ -506,13 +501,15 @@
       }
     }
 
+    // Resolves true once the sounds are loaded, i.e. the session is valid.
     async function loadSounds() {
       try {
-        const res = await fetch('/api/sounds', { headers: { 'X-Pin': getSavedPin() } });
+        const res = await fetch('/api/sounds');
         if (res.status === 401) {
           document.getElementById('login-overlay').style.display = 'grid';
-          return;
+          return false;
         }
+        document.getElementById('login-overlay').style.display = 'none';
         const data = await res.json();
         currentSounds = data.sounds || [];
         const total = currentSounds.reduce((a, s) => a + s.size, 0);
@@ -520,6 +517,7 @@
           `${currentSounds.length} sound · ${fmtMB(total)} MB · panggil di Discord dengan <code>!sb nama [1-10]</code>`;
         filterSounds();
         loadDurations();
+        return true;
       } catch (err) {
         document.getElementById('sound-table').innerHTML =
           `<p class="empty">Daftar sound gagal dimuat. <button onclick="loadSounds()">Coba lagi</button></p>`;
@@ -645,7 +643,6 @@
       try {
         const res = await fetch(`/api/sounds/${encodeURIComponent(name)}`, {
           method: 'DELETE',
-          headers: { 'X-Pin': getSavedPin() },
         });
         const data = await res.json();
         if (res.ok && data.success) {
@@ -673,7 +670,7 @@
       try {
         const res = await fetch(`/api/sounds/${encodeURIComponent(oldName)}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'X-Pin': getSavedPin() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ newName: clean }),
         });
         const data = await res.json();
@@ -711,10 +708,11 @@
     async function api(url, method = 'GET', body) {
       const res = await fetch(url, {
         method,
-        headers: { 'X-Pin': getSavedPin(), 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: body && JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401) document.getElementById('login-overlay').style.display = 'grid'; // session expired
       if (!res.ok) throw new Error(data.error || 'Permintaan gagal');
       return data;
     }

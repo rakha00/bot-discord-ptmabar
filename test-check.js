@@ -166,6 +166,16 @@ assert.strictEqual(filledQueueEmbed.data.title, '📋 Antrean Musik');
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Santai'));
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Kedua'));
 
+// One yt-dlp command per person per second
+{
+  const { cooldownLeft } = require('./src/commands/play');
+  const t = 1_000_000;
+  assert.strictEqual(cooldownLeft('user-a', t), 0, 'first use is allowed');
+  assert.strictEqual(cooldownLeft('user-a', t + 400), 1, 'second use within 1 s waits');
+  assert.strictEqual(cooldownLeft('user-b', t + 400), 0, 'other people are not affected');
+  assert.strictEqual(cooldownLeft('user-a', t + 1000), 0, 'allowed again after 1 s');
+}
+
 assert.strictEqual(typeof searchYouTube, 'function');
 assert.strictEqual(typeof playMusic, 'function');
 assert.strictEqual(typeof skipAudio, 'function');
@@ -177,7 +187,22 @@ const { createWebServer, sanitizeName, getPin, SOUNDS_DIR, normalizeSound } = re
 const path = require('node:path');
 
 // Test sanitization & PIN logic
+// No built-in PIN any more: without WEB_PIN the dashboard stays locked
+delete process.env.WEB_PIN;
+assert.strictEqual(getPin(), '');
+process.env.WEB_PIN = '280303';
 assert.strictEqual(getPin(), '280303');
+
+// Only YouTube links reach yt-dlp (anything else would let Discord users make the server fetch it)
+const { isYouTubeUrl } = require('./src/youtube');
+assert.ok(isYouTubeUrl('https://www.youtube.com/watch?v=abc'));
+assert.ok(isYouTubeUrl('https://youtu.be/abc'));
+assert.ok(isYouTubeUrl('https://music.youtube.com/watch?v=abc'));
+assert.ok(!isYouTubeUrl('http://127.0.0.1:3000/admin'));
+assert.ok(!isYouTubeUrl('http://169.254.169.254/latest/meta-data'));
+assert.ok(!isYouTubeUrl('https://youtube.com.evil.example/watch'));
+assert.ok(!isYouTubeUrl('https://user@youtube.com/watch'));
+assert.ok(!isYouTubeUrl('https://youtube.com:8080/watch'));
 assert.strictEqual(sanitizeName('ADIT_sound-01!@#$%^'), 'adit_sound-01');
 assert.strictEqual(sanitizeName('../../hack'), 'hack');
 
@@ -261,11 +286,20 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.strictEqual(resBig.status, 413);
       assert.ok(!fs.existsSync(path.join(SOUNDS_DIR, 'test_unit_big.mp3')));
 
+      // 5c. A file that is not an MP3 (here a PNG header) is refused and leaves no file
+      const resJunk = await fetch(`${baseUrl}/api/upload?name=test_unit_junk`, {
+        method: 'POST',
+        headers: { 'X-Pin': '280303', 'Content-Type': 'audio/mpeg' },
+        body: Buffer.from('\x89PNG\r\n\x1a\nnot audio', 'latin1'),
+      });
+      assert.strictEqual(resJunk.status, 400);
+      assert.ok(!fs.existsSync(path.join(SOUNDS_DIR, 'test_unit_junk.mp3')));
+
       const createdFile = path.join(SOUNDS_DIR, 'test_unit_sb.mp3');
       assert.ok(fs.existsSync(createdFile), 'File test_unit_sb.mp3 harus terbuat di sounds/');
 
       // 6. Test Stream Raw Audio
-      const resRaw = await fetch(`${baseUrl}/api/raw/test_unit_sb.mp3?pin=280303`);
+      const resRaw = await fetch(`${baseUrl}/api/raw/test_unit_sb.mp3`, { headers: { 'X-Pin': '280303' } });
       assert.strictEqual(resRaw.status, 200);
       assert.strictEqual(resRaw.headers.get('content-type'), 'audio/mpeg');
 
@@ -327,6 +361,52 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.ok(createListEmbed({ galau: [{}, {}] }).data.description.includes('`galau` — 2 lagu'));
       const songs = Array.from({ length: 7 }, (_, i) => ({ title: `L${i}`, url: 'u', duration: '1:00' }));
       assert.ok(createPlayingEmbed('galau', songs).data.description.includes('dan 2 lagu lainnya'));
+
+      // 10. Security: malformed requests get 400 instead of crashing the process (and the bot with it)
+      const net = require('node:net');
+      const rawRequest = text => new Promise(resolve => {
+        const sock = net.connect(port, '127.0.0.1', () => sock.write(text));
+        sock.on('data', d => { resolve(String(d).split('\r\n')[0]); sock.destroy(); });
+        sock.on('error', () => resolve('socket error'));
+      });
+      assert.match(await rawRequest('GET / HTTP/1.1\r\nHost: a b\r\n\r\n'), / 200 /, 'bad Host header is ignored');
+      assert.match(await rawRequest('GET /api/sounds HTTP/1.1\r\nHost: x\r\nCookie: pin=%E0%A4%A\r\n\r\n'), / 401 /);
+      assert.match(await rawRequest('GET /api/raw/%E0%A4%A HTTP/1.1\r\nHost: x\r\nX-Pin: 280303\r\n\r\n'), / 400 /);
+      assert.match(await rawRequest('POST /api/playlists HTTP/1.1\r\nHost: x\r\nX-Pin: 280303\r\nContent-Length: 4\r\n\r\nnull'), / 400 /);
+
+      // The PIN is no longer accepted in the URL (it leaked into logs and history)
+      assert.strictEqual((await fetch(`${baseUrl}/api/sounds?pin=280303`)).status, 401);
+
+      // Login gives a random session cookie (never the PIN); logout ends it
+      const login = await fetch(`${baseUrl}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '280303' }) });
+      assert.strictEqual(login.status, 200);
+      const cookie = login.headers.get('set-cookie');
+      assert.match(cookie, /^session=[a-f0-9]{64}; .*HttpOnly/);
+      assert.ok(!cookie.includes('280303'), 'the cookie must not carry the PIN');
+      const session = cookie.split(';')[0];
+      assert.strictEqual((await fetch(`${baseUrl}/api/sounds`, { headers: { Cookie: session } })).status, 200);
+      await fetch(`${baseUrl}/api/logout`, { method: 'POST', headers: { Cookie: session } });
+      assert.strictEqual((await fetch(`${baseUrl}/api/sounds`, { headers: { Cookie: session } })).status, 401);
+
+      // A non-YouTube link in a playlist is refused before yt-dlp runs
+      const realSearch = createWebServer();
+      await new Promise(r => realSearch.listen(0, r));
+      await fetch(`http://127.0.0.1:${realSearch.address().port}/api/playlists`, { method: 'POST', headers: { 'X-Pin': '280303', 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'ssrf' }) });
+      const ssrf = await fetch(`http://127.0.0.1:${realSearch.address().port}/api/playlists/ssrf/songs`, { method: 'POST', headers: { 'X-Pin': '280303', 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'http://127.0.0.1:1/admin' }) });
+      assert.strictEqual(ssrf.status, 400);
+      realSearch.close();
+      fs.rmSync(process.env.PLAYLISTS_FILE, { force: true });
+
+      // Without WEB_PIN, login is refused outright
+      delete process.env.WEB_PIN;
+      assert.strictEqual((await fetch(`${baseUrl}/api/login`, { method: 'POST', body: JSON.stringify({ pin: '' }) })).status, 503);
+      process.env.WEB_PIN = '280303';
+
+      // Five wrong PINs lock the client out, even for the right PIN (runs last: it locks this test's IP)
+      const tryPin = pin => fetch(`${baseUrl}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+      for (let i = 0; i < 5; i++) assert.strictEqual((await tryPin('000000')).status, 401);
+      assert.strictEqual((await tryPin('280303')).status, 429, 'locked after 5 wrong PINs');
+      assert.strictEqual((await fetch(`${baseUrl}/api/sounds`, { headers: { 'X-Pin': '280303' } })).status, 429, 'X-Pin is locked too');
     } else {
       // Mock handler verification for sandboxed mode
       const handler = server.listeners('request')[0];
@@ -362,7 +442,7 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       fs.rmSync(out, { force: true });
     }
 
-    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names, loudness, playlists) valid');
+    console.log('✔ Web Soundboard Manager (auth, session, lockout, crash-safe, UI, stream, upload, rename, delete, one-word names, loudness, playlists) valid');
     console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
   } finally {
     server.close();

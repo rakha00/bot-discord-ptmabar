@@ -3,6 +3,17 @@ const { spawn } = require('node:child_process');
 // YouTube's Opus track can be passed straight to Discord; anything else falls back to FFmpeg.
 const AUDIO_FORMAT = 'bestaudio[acodec=opus]/bestaudio';
 
+const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be']);
+
+function isYouTubeUrl(text) {
+  try {
+    const url = new URL(text);
+    return ['http:', 'https:'].includes(url.protocol) && YOUTUBE_HOSTS.has(url.hostname) && !url.username && !url.port;
+  } catch {
+    return false;
+  }
+}
+
 function searchYouTube(query) {
   return new Promise((resolve, reject) => {
     const trimmed = query.trim();
@@ -11,6 +22,11 @@ function searchYouTube(query) {
     }
 
     const isUrl = /^https?:\/\//i.test(trimmed);
+    // Only YouTube links: yt-dlp fetches any URL it is given from the server, so another host
+    // (an internal service, a cloud metadata address) would let anyone on Discord probe the network.
+    if (isUrl && !isYouTubeUrl(trimmed)) {
+      return reject(Object.assign(new Error('Hanya URL YouTube yang didukung.'), { code: 'NOT_YOUTUBE' }));
+    }
     const target = isUrl ? trimmed : `ytsearch1:${trimmed}`;
 
     // One full extraction (-j) gives the title and the resolved stream URLs together. The JSON is kept
@@ -56,5 +72,6 @@ function searchYouTube(query) {
 
 module.exports = {
   searchYouTube,
+  isYouTubeUrl,
   AUDIO_FORMAT,
 };

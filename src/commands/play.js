@@ -7,6 +7,24 @@ const PLAY_TRIGGER = /^!(?:play|p)(?:\s|$)/i;
 const SKIP_TRIGGER = /^!skip(?:\s|$)/i;
 const QUEUE_TRIGGER = /^!(?:queue|q)(?:\s|$)/i;
 
+// Every !play, /play and !playlist starts a yt-dlp process (several seconds of CPU), so one person
+// can trigger them at most once per second. Returns the seconds left to wait, or 0 (and starts the wait).
+// ponytail: per user and in memory; add a global cap on yt-dlp processes if several people spam together
+const COOLDOWN_MS = 1000;
+const lastUse = new Map(); // userId -> time of the last allowed use
+
+function cooldownLeft(userId, now = Date.now()) {
+  const left = (lastUse.get(userId) || 0) + COOLDOWN_MS - now;
+  if (left > 0) return Math.ceil(left / 1000);
+  if (lastUse.size > 5000) lastUse.clear(); // bound memory
+  lastUse.set(userId, now);
+  return 0;
+}
+
+function cooldownEmbed(seconds) {
+  return new EmbedBuilder().setColor(0xED4245).setDescription(`⏳ Tunggu ${seconds} detik sebelum memutar lagu lagi.`);
+}
+
 const playSlashCommand = new SlashCommandBuilder()
   .setName('play')
   .setDescription('Putar musik dari YouTube di voice channel')
@@ -128,6 +146,12 @@ async function handleMessage(message) {
     return true;
   }
 
+  const wait = cooldownLeft(message.author.id);
+  if (wait) {
+    await message.channel.send({ embeds: [cooldownEmbed(wait)] }).catch(() => {});
+    return true;
+  }
+
   try {
     const video = await searchYouTube(query);
     const result = await playMusic(voiceChannel, video);
@@ -137,7 +161,7 @@ async function handleMessage(message) {
     console.error('❌ Gagal memutar musik YouTube:', err.message);
     const errEmbed = new EmbedBuilder()
       .setColor(0xED4245)
-      .setDescription('❌ Video YouTube tidak ditemukan atau gagal diputar.');
+      .setDescription(err.code === 'NOT_YOUTUBE' ? '❌ Hanya link YouTube yang bisa diputar.' : '❌ Video YouTube tidak ditemukan atau gagal diputar.');
     await message.channel.send({ embeds: [errEmbed] }).catch(() => {});
   }
 
@@ -158,6 +182,12 @@ async function handleInteraction(interaction) {
       return true;
     }
 
+    const wait = cooldownLeft(interaction.user.id);
+    if (wait) {
+      await interaction.reply({ embeds: [cooldownEmbed(wait)], ephemeral: true });
+      return true;
+    }
+
     const query = interaction.options.getString('query', true);
     await interaction.deferReply();
 
@@ -170,7 +200,7 @@ async function handleInteraction(interaction) {
       console.error('❌ Gagal memutar musik YouTube (/play):', err.message);
       const errEmbed = new EmbedBuilder()
         .setColor(0xED4245)
-        .setDescription('❌ Video YouTube tidak ditemukan atau gagal diputar.');
+        .setDescription(err.code === 'NOT_YOUTUBE' ? '❌ Hanya link YouTube yang bisa diputar.' : '❌ Video YouTube tidak ditemukan atau gagal diputar.');
       await interaction.editReply({ embeds: [errEmbed] });
     }
     return true;
@@ -214,6 +244,8 @@ module.exports = {
   handleInteraction,
   createNowPlayingEmbed,
   createQueueEmbed,
+  cooldownLeft,
+  cooldownEmbed,
   PLAY_TRIGGER,
   SKIP_TRIGGER,
   QUEUE_TRIGGER,

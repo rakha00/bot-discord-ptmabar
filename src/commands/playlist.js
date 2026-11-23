@@ -1,6 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const { loadPlaylists } = require('../playlists');
 const { playMusic } = require('../voiceManager');
+const { cooldownLeft, cooldownEmbed } = require('./play');
 
 const PLAYLIST_TRIGGER = /^!playlist(?:\s|$)/i;
 
@@ -64,6 +65,12 @@ async function handleMessage(message) {
   const voiceChannel = message.member?.voice?.channel;
   if (!voiceChannel) {
     await send(errorEmbed('⚠️ Masuk voice channel terlebih dahulu!'));
+    return true;
+  }
+
+  const wait = cooldownLeft(message.author.id);
+  if (wait) {
+    await send(cooldownEmbed(wait));
     return true;
   }
 

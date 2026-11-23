@@ -1,4 +1,5 @@
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -41,6 +42,15 @@ function normalizeSound(src, dest) {
   });
 }
 
+// An MP3 starts with an ID3 tag or an MPEG audio frame sync (11 set bits). Anything else (a renamed
+// image, a script, an archive) is refused before FFmpeg or the bot ever opens it.
+function looksLikeMp3(file) {
+  const head = Buffer.alloc(3);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, head, 0, 3, 0); } finally { fs.closeSync(fd); }
+  return head.toString('latin1') === 'ID3' || (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0);
+}
+
 // One-off for sounds added before normalization existed: npm run normalize-sounds
 async function normalizeAllSounds() {
   const files = fs.readdirSync(SOUNDS_DIR).filter(f => f.toLowerCase().endsWith('.mp3'));
@@ -52,8 +62,63 @@ async function normalizeAllSounds() {
   }
 }
 
+// No built-in fallback: without WEB_PIN the dashboard stays locked instead of opening with a known PIN.
 function getPin() {
-  return process.env.WEB_PIN || '280303';
+  return process.env.WEB_PIN || '';
+}
+
+function pinMatches(pin) {
+  const real = getPin();
+  const given = Buffer.from(String(pin ?? ''));
+  return Boolean(real) && given.length === Buffer.byteLength(real) && crypto.timingSafeEqual(given, Buffer.from(real));
+}
+
+// A browser that logged in holds a random session token in an HttpOnly cookie; the PIN itself is
+// never stored in the cookie, the URL or localStorage.
+// ponytail: sessions live in memory, so a restart (every deploy) asks for the PIN again; persist them if that annoys
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+const sessions = new Map(); // token -> expiry time
+
+function sessionToken(req) {
+  const match = (req.headers.cookie || '').match(/(?:^|;\s*)session=([a-f0-9]{64})(?:;|$)/);
+  return match ? match[1] : null;
+}
+
+function hasSession(req) {
+  const token = sessionToken(req);
+  const expires = token && sessions.get(token);
+  if (expires && expires > Date.now()) return true;
+  if (token) sessions.delete(token);
+  return false;
+}
+
+// PIN guessing is capped per client: 5 wrong PINs, then 15 minutes locked out.
+// ponytail: per-IP and in memory; a botnet spread over many IPs would need a global cap too
+const MAX_FAILS = 5;
+const LOCK_MS = 15 * 60 * 1000;
+const failures = new Map(); // ip -> { count, until }
+const PRIVATE_IP = /^(::ffff:)?(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)|^::1$|^f[cd]/i;
+
+// Behind Traefik the socket address is the proxy's, so the client is the last X-Forwarded-For entry
+// (the one the proxy added). That header is only trusted when the request comes from a private address.
+function clientIp(req) {
+  const socketIp = req.socket.remoteAddress || '';
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean);
+  return PRIVATE_IP.test(socketIp) && forwarded.length ? forwarded[forwarded.length - 1] : socketIp;
+}
+
+function minutesLocked(ip) {
+  const entry = failures.get(ip);
+  return entry && entry.until > Date.now() ? Math.ceil((entry.until - Date.now()) / 60000) : 0;
+}
+
+function recordFailure(ip) {
+  const entry = failures.get(ip) || { count: 0, until: 0 };
+  if (entry.until && entry.until <= Date.now()) { entry.count = 0; entry.until = 0; }
+  entry.count += 1;
+  if (entry.count >= MAX_FAILS) entry.until = Date.now() + LOCK_MS;
+  if (failures.size > 10000) failures.clear(); // bound memory under a flood
+  failures.set(ip, entry);
 }
 
 function sanitizeName(name) {
@@ -73,7 +138,8 @@ function parseJsonBody(req) {
     });
     req.on('end', () => {
       try {
-        resolve(body ? JSON.parse(body) : {});
+        const value = body ? JSON.parse(body) : {};
+        resolve(value && typeof value === 'object' ? value : {}); // `null`, numbers and strings count as empty
       } catch (err) {
         reject(err);
       }
@@ -82,45 +148,16 @@ function parseJsonBody(req) {
   });
 }
 
-function checkAuth(req, url) {
-  const currentPin = getPin();
-  const headerPin = req.headers['x-pin'];
-  const queryPin = url.searchParams.get('pin');
-  
-  // Also check cookie if present
-  let cookiePin = '';
-  if (req.headers.cookie) {
-    const match = req.headers.cookie.match(/(?:^|;\s*)pin=([^;]*)/);
-    if (match) cookiePin = decodeURIComponent(match[1]);
-  }
-
-  return (headerPin === currentPin) || (queryPin === currentPin) || (cookiePin === currentPin);
-}
-
 function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Pin',
-  });
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 
 // `search` resolves a song title or URL; tests pass a fake so they need no network.
 function createWebServer({ search = searchYouTube } = {}) {
-  return http.createServer(async (req, res) => {
-    // Handle CORS preflight
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, X-Pin',
-      });
-      return res.end();
-    }
-
-    const host = req.headers.host || 'localhost';
-    const parsedUrl = new URL(req.url, `http://${host}`);
+  const route = async (req, res) => {
+    // The Host header is the client's; it plays no part in routing.
+    const parsedUrl = new URL(req.url, 'http://localhost');
     const pathname = parsedUrl.pathname;
 
     // 1. Static Web UI (Index.html)
@@ -133,24 +170,44 @@ function createWebServer({ search = searchYouTube } = {}) {
       return sendJson(res, 404, { error: 'UI tidak ditemukan' });
     }
 
-    // 2. Auth Endpoint: POST /api/login
+    const ip = clientIp(req);
+
+    // 2. Auth: POST /api/login trades the PIN for a session cookie; POST /api/logout ends it
     if (req.method === 'POST' && pathname === '/api/login') {
-      try {
-        const body = await parseJsonBody(req);
-        if (body.pin && String(body.pin).trim() === getPin()) {
-          res.setHeader('Set-Cookie', `pin=${encodeURIComponent(getPin())}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
-          return sendJson(res, 200, { success: true });
-        }
+      const wait = minutesLocked(ip);
+      if (wait) return sendJson(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${wait} menit.` });
+      if (!getPin()) return sendJson(res, 503, { error: 'PIN web belum diatur di server (WEB_PIN).' });
+      let body;
+      try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Invalid JSON' }); }
+      if (!pinMatches(String(body.pin ?? '').trim())) {
+        recordFailure(ip);
         return sendJson(res, 401, { error: 'PIN salah' });
-      } catch {
-        return sendJson(res, 400, { error: 'Invalid JSON' });
       }
+      failures.delete(ip);
+      const token = crypto.randomBytes(32).toString('hex');
+      sessions.set(token, Date.now() + SESSION_MS);
+      const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+      res.setHeader('Set-Cookie', `session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}${secure}`);
+      return sendJson(res, 200, { success: true });
     }
 
-    // Protect all remaining /api routes with PIN authentication
+    if (req.method === 'POST' && pathname === '/api/logout') {
+      sessions.delete(sessionToken(req));
+      res.setHeader('Set-Cookie', 'session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+      return sendJson(res, 200, { success: true });
+    }
+
+    // Every other /api route needs the session cookie, or the PIN in an X-Pin header (scripts, tests).
+    // A wrong X-Pin counts toward the same lockout as a wrong login.
     if (pathname.startsWith('/api/')) {
-      if (!checkAuth(req, parsedUrl)) {
-        return sendJson(res, 401, { error: 'Akses ditolak: PIN tidak valid atau belum login' });
+      const headerPin = req.headers['x-pin'];
+      if (headerPin !== undefined && minutesLocked(ip)) {
+        return sendJson(res, 429, { error: 'Terlalu banyak percobaan PIN. Coba lagi nanti.' });
+      }
+      const authorized = hasSession(req) || (headerPin !== undefined && pinMatches(headerPin));
+      if (!authorized) {
+        if (headerPin !== undefined) recordFailure(ip);
+        return sendJson(res, 401, { error: 'Akses ditolak: belum login' });
       }
 
       // 3. GET /api/sounds: List all soundboard files
@@ -255,6 +312,10 @@ function createWebServer({ search = searchYouTube } = {}) {
             if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
             return sendJson(res, 400, { error: 'File kosong atau tidak terkirim' });
           }
+          if (!looksLikeMp3(tempPath)) {
+            fs.rmSync(tempPath, { force: true });
+            return sendJson(res, 400, { error: 'File bukan MP3 yang valid' });
+          }
           normalizeSound(tempPath, targetPath).then(normalized => {
             console.log(`[Web Soundboard] Uploaded sound "${clean}.mp3" (${receivedBytes} bytes${normalized ? ', normalized' : ''})`);
             sendJson(res, 200, { success: true, name: clean });
@@ -357,7 +418,13 @@ function createWebServer({ search = searchYouTube } = {}) {
           const query = String(body.query || '').trim();
           if (!query) return sendJson(res, 400, { error: 'Isi judul lagu atau URL YouTube' });
           let video;
-          try { video = await search(query); } catch { return sendJson(res, 404, { error: 'Lagu tidak ditemukan di YouTube' }); }
+          try {
+            video = await search(query);
+          } catch (err) {
+            return err.code === 'NOT_YOUTUBE'
+              ? sendJson(res, 400, { error: err.message })
+              : sendJson(res, 404, { error: 'Lagu tidak ditemukan di YouTube' });
+          }
           // Re-read: another request may have changed the file during the slow search
           const fresh = loadPlaylists();
           if (!fresh[name]) return sendJson(res, 404, { error: 'Playlist tidak ditemukan' });
@@ -378,11 +445,23 @@ function createWebServer({ search = searchYouTube } = {}) {
 
     // Fallback 404
     sendJson(res, 404, { error: 'Not Found' });
+  };
+
+  // A malformed request (bad %-escape, unexpected JSON) must never take the bot down with it.
+  return http.createServer(async (req, res) => {
+    try {
+      await route(req, res);
+    } catch (err) {
+      console.error('[Web] Request ditolak:', err.message);
+      if (!res.headersSent) sendJson(res, 400, { error: 'Permintaan tidak valid' });
+      else res.destroy();
+    }
   });
 }
 
 function startWebServer(port = parseInt(process.env.PORT, 10) || 3000) {
   const server = createWebServer();
+  if (!getPin()) console.warn('⚠️ WEB_PIN belum diatur: Web Soundboard Manager terkunci sampai WEB_PIN diisi.');
   server.listen(port, () => {
     console.log(`🌐 Web Soundboard Manager aktif di http://0.0.0.0:${port}`);
   });
