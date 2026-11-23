@@ -141,7 +141,7 @@ const filledQueueEmbed = createQueueEmbed({
     { title: 'Lagu Kedua', url: 'https://youtube.com/watch?v=456', duration: '4:10' }
   ]
 });
-assert.strictEqual(filledQueueEmbed.data.title, '📋 Antrean Musik YouTube');
+assert.strictEqual(filledQueueEmbed.data.title, '📋 Antrean Musik');
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Santai'));
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Kedua'));
 
@@ -152,7 +152,7 @@ assert.strictEqual(typeof getQueue, 'function');
 console.log('✔ YouTube Music playback, queue, skip logic & embed schemas valid');
 
 // 7. Test Web Soundboard Manager (Auth, Endpoints, Upload, Rename, Delete)
-const { createWebServer, sanitizeName, getPin, SOUNDS_DIR } = require('./src/web/server');
+const { createWebServer, sanitizeName, getPin, SOUNDS_DIR, normalizeSound } = require('./src/web/server');
 const path = require('node:path');
 
 // Test sanitization & PIN logic
@@ -288,7 +288,23 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
     assert.strictEqual(el.value, 'aku');
     assert.strictEqual(el.caret, 2);
 
-    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names) valid');
+    // Loudness normalization: a clip at full scale comes out near -20 LUFS (skipped without ffmpeg)
+    const { spawnSync } = require('node:child_process');
+    const os = require('node:os');
+    if (!spawnSync('ffmpeg', ['-version']).error) {
+      const loud = path.join(os.tmpdir(), `.loud_${process.pid}.tmp`);
+      const out = path.join(os.tmpdir(), `loud_${process.pid}.mp3`);
+      spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-af', 'volume=0.99', loud + '.mp3']);
+      fs.renameSync(loud + '.mp3', loud);
+      assert.strictEqual(await normalizeSound(loud, out), true);
+      const meter = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', out, '-af', 'ebur128', '-f', 'null', '-'], { encoding: 'utf8' }).stderr;
+      const lufs = Number(meter.slice(meter.lastIndexOf('Summary')).match(/I:\s+(-?[\d.]+)/)[1]);
+      assert.ok(Math.abs(lufs + 20) <= 2.5, `normalized clip should be ~-20 LUFS, got ${lufs}`);
+      assert.ok(!fs.existsSync(loud), 'source temp file removed');
+      fs.rmSync(out, { force: true });
+    }
+
+    console.log('✔ Web Soundboard Manager (auth, PIN 280303, UI, stream, upload, rename, delete, one-word names, loudness) valid');
     console.log('\n🎉 ALL MODULAR CHECKS PASSED SUCCESSFULLY!');
   } finally {
     server.close();

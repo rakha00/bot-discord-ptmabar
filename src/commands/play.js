@@ -73,7 +73,7 @@ function createQueueEmbed(queueData) {
 
   return new EmbedBuilder()
     .setColor(0xF1C40F)
-    .setTitle('📋 Antrean Musik YouTube')
+    .setTitle('📋 Antrean Musik')
     .setDescription(lines.join('\n'));
 }
 

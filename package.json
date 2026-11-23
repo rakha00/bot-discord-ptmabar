@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env index.js",
-    "test": "node test-check.js"
+    "test": "node test-check.js",
+    "normalize-sounds": "node -e \"require('./src/web/server').normalizeAllSounds()\""
   },
   "keywords": [],
   "author": "",

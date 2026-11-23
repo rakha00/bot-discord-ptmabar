@@ -1,10 +1,54 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 
 const SOUNDS_DIR = path.join(__dirname, '..', '..', 'sounds');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_UPLOAD_BYTES = 500 * 1024; // 500 KB per sound
+
+// Every sound is levelled to the same loudness so no clip is much louder than another.
+// -20 LUFS sits near voice-chat level; the true-peak cap keeps loud memes from clipping.
+const TARGET_LUFS = -20;
+
+// Re-encodes `src` with FFmpeg's loudnorm and moves the result to `dest` (atomic rename).
+// If FFmpeg is missing or fails, `src` is kept as is, so an upload is never lost.
+// Resolves true when the file was normalized.
+// ponytail: single-pass loudnorm, accurate to ~1-2 LU on short clips; two-pass if that ever matters
+function normalizeSound(src, dest) {
+  const out = `${src}.norm.mp3`;
+  return new Promise(resolve => {
+    const ff = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', src,
+      '-af', `loudnorm=I=${TARGET_LUFS}:TP=-2:LRA=11`,
+      '-ar', '48000', '-c:a', 'libmp3lame', '-b:a', '128k', out,
+    ]);
+    let err = '';
+    ff.stderr.on('data', d => { err += d; });
+    let done = false; // 'error' and 'close' can both fire when ffmpeg fails to start
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      if (!ok) console.warn(`[Normalize] Skipped ${path.basename(dest)}: ${err.trim().split('\n').pop() || 'ffmpeg unavailable'}`);
+      fs.rmSync(ok ? src : out, { force: true });
+      fs.renameSync(ok ? out : src, dest);
+      resolve(ok);
+    };
+    ff.on('error', () => finish(false));
+    ff.on('close', code => finish(code === 0));
+  });
+}
+
+// One-off for sounds added before normalization existed: npm run normalize-sounds
+async function normalizeAllSounds() {
+  const files = fs.readdirSync(SOUNDS_DIR).filter(f => f.toLowerCase().endsWith('.mp3'));
+  for (const f of files) {
+    const file = path.join(SOUNDS_DIR, f);
+    const tmp = path.join(SOUNDS_DIR, `.${f}.orig`);
+    fs.copyFileSync(file, tmp);
+    console.log(`${(await normalizeSound(tmp, file)) ? 'OK  ' : 'SKIP'} ${f}`);
+  }
+}
 
 function getPin() {
   return process.env.WEB_PIN || '280303';
@@ -208,10 +252,10 @@ function createWebServer() {
             if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
             return sendJson(res, 400, { error: 'File kosong atau tidak terkirim' });
           }
-          // Atomic replace
-          fs.renameSync(tempPath, targetPath);
-          console.log(`[Web Soundboard] Uploaded sound "${clean}.mp3" (${receivedBytes} bytes)`);
-          return sendJson(res, 200, { success: true, name: clean });
+          normalizeSound(tempPath, targetPath).then(normalized => {
+            console.log(`[Web Soundboard] Uploaded sound "${clean}.mp3" (${receivedBytes} bytes${normalized ? ', normalized' : ''})`);
+            sendJson(res, 200, { success: true, name: clean });
+          });
         });
 
         writeStream.on('error', err => {
@@ -291,4 +335,6 @@ module.exports = {
   getPin,
   SOUNDS_DIR,
   PUBLIC_DIR,
+  normalizeSound,
+  normalizeAllSounds,
 };
