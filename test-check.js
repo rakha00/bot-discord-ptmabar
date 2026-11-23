@@ -292,6 +292,7 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.strictEqual((await call('/api/playlists', 'POST', { name: 'Galau Malam' })).status, 200);
       assert.strictEqual((await call('/api/playlists', 'POST', { name: 'galaumalam' })).status, 409, 'duplicate name');
       assert.strictEqual((await call('/api/playlists', 'POST', { name: '!!!' })).status, 400, 'invalid name');
+      assert.strictEqual((await call('/api/playlists', 'POST', { name: 'List' })).status, 400, '"list" is reserved for !playlist list');
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'satu' })).status, 200);
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'dua' })).status, 200);
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: '' })).status, 400, 'empty query');

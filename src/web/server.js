@@ -335,6 +335,8 @@ function createWebServer({ search = searchYouTube } = {}) {
           try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
           const newName = sanitizeName(body.name);
           if (!newName) return sendJson(res, 400, { error: 'Nama playlist tidak valid (hanya huruf, angka, dash, underscore)' });
+          // "list" is taken by `!playlist list`, so a playlist with that name could never be played
+          if (newName === 'list') return sendJson(res, 400, { error: 'Nama "list" sudah dipakai untuk !playlist list' });
           if (playlists[newName]) return sendJson(res, 409, { error: `Playlist "${newName}" sudah ada` });
           playlists[newName] = [];
           savePlaylists(playlists);
