@@ -233,57 +233,30 @@ async function getOrCreateConnection(voiceChannel) {
   return connection;
 }
 
-async function playDonation(voiceChannel, speechText) {
-  const connection = await getOrCreateConnection(voiceChannel);
-  const guildData = getGuildData(voiceChannel.guild.id);
-  clearIdleTimer(voiceChannel.guild.id);
-
-  connection.subscribe(guildData.player);
-
-  // 1. Putar bunyi efek bel/kasir (Cha-ching!) jika file alert.mp3 ada
-  if (fs.existsSync(ALERT_PATH)) {
-    console.log('[Donasi] Memutar efek suara pembuka alert.mp3');
-    guildData.queue.push({ type: 'file', path: ALERT_PATH });
-  } else {
-    console.warn('[Donasi] File alert.mp3 tidak ditemukan di:', ALERT_PATH);
-  }
-
-  // 2. Masukkan teks donasi TTS ke antrean
-  const chunks = splitText(speechText);
-  guildData.queue.push(...chunks);
-
-  if (!guildData.isPlaying) {
-    playNext(voiceChannel.guild.id);
-  }
-
-  checkChannelOccupancy(voiceChannel.guild);
-}
-
-// A soundboard cuts in right away. It replaces any soundboard still waiting (so spamming !sb does
-// not pile up), but the music queue survives: an interrupted song goes back to the front and
-// restarts from the beginning once the soundboard is done.
-function queueWithSoundboard(queue, current, filePath, times) {
+// Soundboards and donations cut in right away, ahead of everything else. Only soundboards are
+// throwaway: one still waiting is dropped (so spamming !sb does not pile up), and an interrupted
+// soundboard is not replayed. Whatever else was interrupted (a song, a donation's TTS) goes back
+// to the front and starts again once the new audio is done, and the rest of the queue is kept.
+function queueWithInterrupt(queue, current, items) {
   return [
-    ...Array.from({ length: times }, () => ({ type: 'file', path: filePath, soundboard: true })),
-    ...(current?.type === 'youtube' ? [current] : []),
+    ...items,
+    ...(current && !current.soundboard ? [current] : []),
     ...queue.filter(item => !item?.soundboard),
   ];
 }
 
-async function playSoundboard(voiceChannel, filePath, repeat = 1) {
+async function interruptWith(voiceChannel, items) {
   const connection = await getOrCreateConnection(voiceChannel);
   const guildData = getGuildData(voiceChannel.guild.id);
   clearIdleTimer(voiceChannel.guild.id);
 
   connection.subscribe(guildData.player);
-
-  const times = Math.min(Math.max(parseInt(repeat, 10) || 1, 1), 10);
 
   if (guildData.currentProc) {
     guildData.currentProc.kill();
     guildData.currentProc = null;
   }
-  guildData.queue = queueWithSoundboard(guildData.queue, guildData.current, filePath, times);
+  guildData.queue = queueWithInterrupt(guildData.queue, guildData.current, items);
   guildData.current = null;
 
   if (guildData.player.state.status !== AudioPlayerStatus.Idle) {
@@ -293,6 +266,26 @@ async function playSoundboard(voiceChannel, filePath, repeat = 1) {
   }
 
   checkChannelOccupancy(voiceChannel.guild);
+}
+
+async function playDonation(voiceChannel, speechText) {
+  const items = [];
+  // 1. Putar bunyi efek bel/kasir (Cha-ching!) jika file alert.mp3 ada
+  if (fs.existsSync(ALERT_PATH)) {
+    console.log('[Donasi] Memutar efek suara pembuka alert.mp3');
+    items.push({ type: 'file', path: ALERT_PATH });
+  } else {
+    console.warn('[Donasi] File alert.mp3 tidak ditemukan di:', ALERT_PATH);
+  }
+  // 2. Teks donasi TTS
+  items.push(...splitText(speechText));
+
+  await interruptWith(voiceChannel, items);
+}
+
+async function playSoundboard(voiceChannel, filePath, repeat = 1) {
+  const times = Math.min(Math.max(parseInt(repeat, 10) || 1, 1), 10);
+  await interruptWith(voiceChannel, Array.from({ length: times }, () => ({ type: 'file', path: filePath, soundboard: true })));
 }
 
 async function playMusic(voiceChannel, videoInfo) {
@@ -370,7 +363,7 @@ function getQueue(guildId) {
 module.exports = {
   playDonation,
   playSoundboard,
-  queueWithSoundboard,
+  queueWithInterrupt,
   playMusic,
   skipAudio,
   stopAudio,

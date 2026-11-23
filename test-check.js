@@ -99,18 +99,27 @@ const {
   QUEUE_TRIGGER,
 } = require('./src/commands/play');
 const { searchYouTube } = require('./src/youtube');
-const { playMusic, skipAudio, getQueue, queueWithSoundboard } = require('./src/voiceManager');
+const { playMusic, skipAudio, getQueue, queueWithInterrupt } = require('./src/voiceManager');
 
-// A soundboard interrupts music without wiping the queue
+// Soundboards and donations interrupt without wiping the queue
 {
+  const label = q => q.map(i => (typeof i === 'string' ? `tts:${i}` : i.title || i.path));
   const song = { type: 'youtube', title: 'Lagu Satu' };
   const next = { type: 'youtube', title: 'Lagu Dua' };
-  const oldSb = { type: 'file', path: 'old.mp3', soundboard: true };
-  const q = queueWithSoundboard([oldSb, next], song, 'adit.mp3', 2);
-  assert.deepStrictEqual(q.map(i => i.title || i.path), ['adit.mp3', 'adit.mp3', 'Lagu Satu', 'Lagu Dua']);
-  // A soundboard over a soundboard does not requeue the old one
-  const q2 = queueWithSoundboard([song, next], oldSb, 'aduh.mp3', 1);
-  assert.deepStrictEqual(q2.map(i => i.title || i.path), ['aduh.mp3', 'Lagu Satu', 'Lagu Dua']);
+  const sb = path => ({ type: 'file', path, soundboard: true });
+  const oldSb = sb('old.mp3');
+  // A soundboard over music: waiting soundboards dropped, the song restarts after it
+  assert.deepStrictEqual(label(queueWithInterrupt([oldSb, next], song, [sb('adit.mp3'), sb('adit.mp3')])),
+    ['adit.mp3', 'adit.mp3', 'Lagu Satu', 'Lagu Dua']);
+  // A soundboard over a soundboard does not replay the old one
+  assert.deepStrictEqual(label(queueWithInterrupt([song, next], oldSb, [sb('aduh.mp3')])), ['aduh.mp3', 'Lagu Satu', 'Lagu Dua']);
+  // A donation over music behaves the same: alert and TTS first, then the song again
+  const donation = [{ type: 'file', path: 'alert.mp3' }, 'Budi donasi 10 ribu'];
+  assert.deepStrictEqual(label(queueWithInterrupt([next], song, donation)),
+    ['alert.mp3', 'tts:Budi donasi 10 ribu', 'Lagu Satu', 'Lagu Dua']);
+  // A soundboard over a donation never loses the donation: the cut-off TTS chunk is replayed
+  assert.deepStrictEqual(label(queueWithInterrupt(['bagian 2', song], 'bagian 1', [sb('aduh.mp3')])),
+    ['aduh.mp3', 'tts:bagian 1', 'tts:bagian 2', 'Lagu Satu']);
 }
 
 assert.strictEqual(playSlashCommand.name, 'play');
