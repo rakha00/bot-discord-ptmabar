@@ -97,9 +97,25 @@ const {
   PLAY_TRIGGER,
   SKIP_TRIGGER,
   QUEUE_TRIGGER,
+  SHUFFLE_TRIGGER,
+  LOOP_TRIGGER,
+  REMOVE_TRIGGER,
+  parseLoopMode,
 } = require('./src/commands/play');
 const { searchYouTube } = require('./src/youtube');
-const { playMusic, skipAudio, getQueue, queueWithInterrupt, getStreamInfo, buildSeekFfmpegArgs } = require('./src/voiceManager');
+const {
+  playMusic,
+  skipAudio,
+  shuffleQueue,
+  setLoopMode,
+  removeFromQueue,
+  getQueue,
+  queueWithInterrupt,
+  nextAfterFinish,
+  shuffleMusicQueue,
+  getStreamInfo,
+  buildSeekFfmpegArgs,
+} = require('./src/voiceManager');
 
 // Soundboards and donations interrupt without wiping the queue
 {
@@ -189,6 +205,7 @@ assert.strictEqual(emptyQueueEmbed.data.title, '📋 Antrean Musik Kosong');
 const filledQueueEmbed = createQueueEmbed({
   isPlaying: true,
   current: mockVideo,
+  loopMode: 'queue',
   queue: [
     { title: 'Lagu Kedua', url: 'https://youtube.com/watch?v=456', duration: '4:10' }
   ]
@@ -196,6 +213,48 @@ const filledQueueEmbed = createQueueEmbed({
 assert.strictEqual(filledQueueEmbed.data.title, '📋 Antrean Musik');
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Santai'));
 assert.ok(filledQueueEmbed.data.description.includes('Lagu Kedua'));
+assert.strictEqual(filledQueueEmbed.data.footer.text, '🔁 Loop: Antrean');
+
+// Queue controls: !shuffle, !loop, !remove
+assert.strictEqual(SHUFFLE_TRIGGER.test('!shuffle'), true);
+assert.strictEqual(SHUFFLE_TRIGGER.test('shuffle'), false);
+assert.strictEqual(LOOP_TRIGGER.test('!loop'), true);
+assert.strictEqual(LOOP_TRIGGER.test('!loop queue'), true);
+assert.strictEqual(REMOVE_TRIGGER.test('!remove 2'), true);
+assert.strictEqual(REMOVE_TRIGGER.test('!rm 1'), true);
+assert.strictEqual(parseLoopMode(''), null);
+assert.strictEqual(parseLoopMode('lagu'), 'track');
+assert.strictEqual(parseLoopMode('antrean'), 'queue');
+assert.strictEqual(parseLoopMode('off'), 'off');
+assert.strictEqual(parseLoopMode('ngawur'), undefined);
+
+{
+  const y1 = { type: 'youtube', title: 'A', seekMs: 12000 };
+  const y2 = { type: 'youtube', title: 'B' };
+  const y3 = { type: 'youtube', title: 'C' };
+  const tts = 'halo';
+  assert.deepStrictEqual(nextAfterFinish([y2], y1, 'off'), [y2]);
+  const trackLoop = nextAfterFinish([y2], y1, 'track');
+  assert.strictEqual(trackLoop[0].title, 'A');
+  assert.strictEqual(trackLoop[0].seekMs, 0, 'looped track resets seekMs to 0');
+  assert.strictEqual(trackLoop[1].title, 'B');
+  const queueLoop = nextAfterFinish([y2], y1, 'queue');
+  assert.deepStrictEqual(queueLoop.map(i => i.title), ['B', 'A']);
+  assert.strictEqual(queueLoop[1].seekMs, 0);
+  assert.deepStrictEqual(nextAfterFinish([y2], tts, 'track'), [y2], 'never loops TTS or soundboard');
+
+  const shuffled = shuffleMusicQueue([tts, y1, y2, y3], () => 0);
+  assert.strictEqual(shuffled[0], tts, 'non-youtube prefix stays at front');
+  assert.deepStrictEqual(shuffled.slice(1).map(i => i.title), ['B', 'C', 'A']);
+
+  assert.strictEqual(setLoopMode('g-test'), 'track');
+  assert.strictEqual(setLoopMode('g-test'), 'queue');
+  assert.strictEqual(setLoopMode('g-test'), 'off');
+  assert.strictEqual(setLoopMode('g-test', 'queue'), 'queue');
+  assert.strictEqual(getQueue('g-test').loopMode, 'queue');
+  assert.strictEqual(shuffleQueue('g-test'), 0);
+  assert.strictEqual(removeFromQueue('g-test', 1), null);
+}
 
 // One yt-dlp command per person per second
 {

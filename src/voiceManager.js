@@ -22,8 +22,16 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 menit jika idle tidak ada donasi
 const EMPTY_TIMEOUT_MS = 5 * 60 * 1000; // 5 menit jika voice channel kosong
 const ALERT_PATH = path.join(__dirname, '..', 'assets', 'alert.mp3');
 
-// Cache per-guild: { player, queue, current, isPlaying, idleTimer, emptyTimer, currentProc }
+// Cache per-guild: { player, queue, current, currentResource, loopMode, isPlaying, idleTimer, emptyTimer, currentProc }
 const players = new Map();
+
+function nextAfterFinish(queue, current, loopMode) {
+  if (current?.type !== 'youtube') return queue;
+  const reset = { ...current, seekMs: 0 };
+  if (loopMode === 'track') return [reset, ...queue];
+  if (loopMode === 'queue') return [...queue, reset];
+  return queue;
+}
 
 function getGuildData(guildId) {
   let guildData = players.get(guildId);
@@ -34,6 +42,7 @@ function getGuildData(guildId) {
       queue: [],
       current: null,
       currentResource: null,
+      loopMode: 'off',
       isPlaying: false,
       idleTimer: null,
       emptyTimer: null,
@@ -46,11 +55,15 @@ function getGuildData(guildId) {
         guildData.currentProc = null;
       }
       guildData.currentResource = null;
+      guildData.queue = nextAfterFinish(guildData.queue, guildData.current, guildData.loopMode);
+      guildData.current = null;
       playNext(guildId);
     });
 
     player.on('error', (err) => {
       console.error(`[Player Error] Guild ${guildId}:`, err.message);
+      guildData.currentResource = null;
+      guildData.current = null;
       playNext(guildId);
     });
 
@@ -114,6 +127,7 @@ function checkChannelOccupancy(guild) {
       guildData.queue = [];
       guildData.current = null;
       guildData.currentResource = null;
+      guildData.loopMode = 'off';
       guildData.player.stop();
     }
     return;
@@ -211,6 +225,7 @@ async function playNext(guildId) {
 
       const stream = seekSec >= 1 ? getStreamInfo(nextItem.info) : null;
       if (stream?.duration && seekSec >= stream.duration) {
+        guildData.current = null;
         return playNext(guildId);
       }
 
@@ -274,6 +289,7 @@ async function playNext(guildId) {
     }
   } catch (err) {
     console.error(`[Audio Error] Gagal memutar audio:`, err.message);
+    guildData.current = null;
     playNext(guildId);
   }
 }
@@ -412,6 +428,7 @@ function skipAudio(guildId) {
     guildData.currentProc = null;
   }
 
+  guildData.current = null;
   guildData.currentResource = null;
   guildData.player.stop(true);
   return true;
@@ -429,19 +446,60 @@ function stopAudio(guildId) {
   guildData.queue = [];
   guildData.current = null;
   guildData.currentResource = null;
+  guildData.loopMode = 'off';
   guildData.isPlaying = false;
   guildData.player.stop(true);
   startIdleTimer(guildId);
   return true;
 }
 
+function shuffleMusicQueue(queue, random = Math.random) {
+  const prefix = [];
+  const songs = [];
+  for (const item of queue) {
+    if (item?.type === 'youtube') songs.push(item);
+    else prefix.push(item);
+  }
+  for (let i = songs.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [songs[i], songs[j]] = [songs[j], songs[i]];
+  }
+  return [...prefix, ...songs];
+}
+
+function shuffleQueue(guildId) {
+  const guildData = players.get(guildId);
+  if (!guildData) return 0;
+  const songCount = guildData.queue.filter(i => i?.type === 'youtube').length;
+  if (songCount < 2) return 0;
+  guildData.queue = shuffleMusicQueue(guildData.queue);
+  prefetchNext(guildData);
+  return songCount;
+}
+
+function setLoopMode(guildId, mode) {
+  const guildData = getGuildData(guildId);
+  const cycle = { off: 'track', track: 'queue', queue: 'off' };
+  guildData.loopMode = mode || cycle[guildData.loopMode] || 'track';
+  return guildData.loopMode;
+}
+
+function removeFromQueue(guildId, oneBasedIndex) {
+  const guildData = players.get(guildId);
+  if (!guildData || oneBasedIndex < 1 || oneBasedIndex > guildData.queue.length) return null;
+  const [removed] = guildData.queue.splice(oneBasedIndex - 1, 1);
+  if (oneBasedIndex === 1) prefetchNext(guildData);
+  return removed;
+}
+
 function getQueue(guildId) {
   const guildData = players.get(guildId);
-  if (!guildData) return { isPlaying: false, current: null, queue: [] };
+  if (!guildData) return { isPlaying: false, current: null, queue: [], loopMode: 'off' };
   return {
     isPlaying: guildData.isPlaying,
     current: guildData.current || null,
     queue: [...guildData.queue],
+    loopMode: guildData.loopMode,
   };
 }
 
@@ -449,11 +507,16 @@ module.exports = {
   playDonation,
   playSoundboard,
   queueWithInterrupt,
+  nextAfterFinish,
+  shuffleMusicQueue,
   getStreamInfo,
   buildSeekFfmpegArgs,
   playMusic,
   skipAudio,
   stopAudio,
+  shuffleQueue,
+  setLoopMode,
+  removeFromQueue,
   getQueue,
   checkChannelOccupancy,
   IDLE_TIMEOUT_MS,

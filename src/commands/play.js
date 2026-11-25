@@ -1,11 +1,47 @@
 const path = require('node:path');
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { searchYouTube } = require('../youtube');
-const { playMusic, skipAudio, getQueue } = require('../voiceManager');
+const {
+  playMusic,
+  skipAudio,
+  shuffleQueue,
+  setLoopMode,
+  removeFromQueue,
+  getQueue,
+} = require('../voiceManager');
 
 const PLAY_TRIGGER = /^!(?:play|p)(?:\s|$)/i;
 const SKIP_TRIGGER = /^!skip(?:\s|$)/i;
 const QUEUE_TRIGGER = /^!(?:queue|q)(?:\s|$)/i;
+const SHUFFLE_TRIGGER = /^!shuffle(?:\s|$)/i;
+const LOOP_TRIGGER = /^!loop(?:\s|$)/i;
+const REMOVE_TRIGGER = /^!(?:remove|rm)(?:\s|$)/i;
+
+const LOOP_LABELS = { off: 'Mati', track: 'Lagu ini', queue: 'Antrean' };
+const LOOP_ALIASES = {
+  track: 'track', song: 'track', lagu: 'track', one: 'track', '1': 'track',
+  queue: 'queue', all: 'queue', antrean: 'queue',
+  off: 'off', mati: 'off', stop: 'off', '0': 'off',
+};
+
+function parseLoopMode(arg) {
+  const clean = (arg || '').trim().toLowerCase();
+  if (!clean) return null;
+  return LOOP_ALIASES[clean];
+}
+
+function sendEmbed(channel, color, description) {
+  return channel.send({ embeds: [new EmbedBuilder().setColor(color).setDescription(description)] }).catch(() => {});
+}
+
+async function requireVoice(message) {
+  const voiceChannel = message.member?.voice?.channel;
+  if (!voiceChannel) {
+    await sendEmbed(message.channel, 0xED4245, '⚠️ Masuk voice channel terlebih dahulu!');
+    return null;
+  }
+  return voiceChannel;
+}
 
 // Every !play, /play and !playlist starts a yt-dlp process (several seconds of CPU), so one person
 // can trigger them at most once per second. Returns the seconds left to wait, or 0 (and starts the wait).
@@ -89,10 +125,14 @@ function createQueueEmbed(queueData) {
     }
   }
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(0xF1C40F)
     .setTitle('📋 Antrean Musik')
     .setDescription(lines.join('\n'));
+  if (queueData.loopMode && queueData.loopMode !== 'off') {
+    embed.setFooter({ text: `🔁 Loop: ${LOOP_LABELS[queueData.loopMode]}` });
+  }
+  return embed;
 }
 
 async function handleMessage(message) {
@@ -100,51 +140,74 @@ async function handleMessage(message) {
 
   // 1. Perintah !skip
   if (SKIP_TRIGGER.test(content)) {
-    const voiceChannel = message.member?.voice?.channel;
-    if (!voiceChannel) {
-      const errorEmbed = new EmbedBuilder()
-        .setColor(0xED4245)
-        .setDescription('⚠️ Masuk voice channel terlebih dahulu!');
-      await message.channel.send({ embeds: [errorEmbed] }).catch(() => {});
-      return true;
-    }
-
+    if (!await requireVoice(message)) return true;
     skipAudio(message.guild.id);
-    const skipEmbed = new EmbedBuilder()
-      .setColor(0xF1C40F)
-      .setDescription('⏭️ Lagu berhasil dilewati!');
-    await message.channel.send({ embeds: [skipEmbed] }).catch(() => {});
+    await sendEmbed(message.channel, 0xF1C40F, '⏭️ Lagu berhasil dilewati!');
     return true;
   }
 
   // 2. Perintah !queue atau !q
   if (QUEUE_TRIGGER.test(content)) {
     const queueData = getQueue(message.guild.id);
-    const embed = createQueueEmbed(queueData);
-    await message.channel.send({ embeds: [embed] }).catch(() => {});
+    await message.channel.send({ embeds: [createQueueEmbed(queueData)] }).catch(() => {});
     return true;
   }
 
-  // 3. Perintah !play atau !p
+  // 3. Perintah !shuffle
+  if (SHUFFLE_TRIGGER.test(content)) {
+    if (!await requireVoice(message)) return true;
+    const count = shuffleQueue(message.guild.id);
+    if (!count) {
+      await sendEmbed(message.channel, 0xED4245, '⚠️ Minimal ada 2 lagu di antrean untuk diacak.');
+      return true;
+    }
+    await sendEmbed(message.channel, 0xF1C40F, `🔀 ${count} lagu dalam antrean berhasil diacak.`);
+    return true;
+  }
+
+  // 4. Perintah !loop [lagu|antrean|off]
+  if (LOOP_TRIGGER.test(content)) {
+    if (!await requireVoice(message)) return true;
+    const arg = content.replace(/^!loop\s*/i, '');
+    const parsed = parseLoopMode(arg);
+    if (parsed === undefined) {
+      await sendEmbed(message.channel, 0xF1C40F, '🔁 Gunakan: `!loop [lagu|antrean|off]`');
+      return true;
+    }
+    const mode = setLoopMode(message.guild.id, parsed);
+    await sendEmbed(message.channel, 0xF1C40F, `🔁 Loop: **${LOOP_LABELS[mode]}**`);
+    return true;
+  }
+
+  // 5. Perintah !remove <no>
+  if (REMOVE_TRIGGER.test(content)) {
+    if (!await requireVoice(message)) return true;
+    const arg = content.replace(/^!(?:remove|rm)\s*/i, '').trim();
+    if (!/^\d+$/.test(arg) || Number(arg) < 1) {
+      await sendEmbed(message.channel, 0xF1C40F, '🗑️ Gunakan: `!remove <nomor antrean>`');
+      return true;
+    }
+    const num = Number(arg);
+    const removed = removeFromQueue(message.guild.id, num);
+    if (!removed) {
+      await sendEmbed(message.channel, 0xED4245, `❌ Tidak ada lagu di nomor antrean \`#${num}\`.`);
+      return true;
+    }
+    await sendEmbed(message.channel, 0xF1C40F, `🗑️ Dihapus dari antrean: ${formatQueueItem(removed)}`);
+    return true;
+  }
+
+  // 6. Perintah !play atau !p
   if (!PLAY_TRIGGER.test(content)) return false;
 
   const query = content.replace(/^!(?:play|p)\s*/i, '').trim();
   if (!query) {
-    const hintEmbed = new EmbedBuilder()
-      .setColor(0xF1C40F)
-      .setDescription('🎵 Gunakan: `!play <judul lagu atau URL YouTube>`');
-    await message.channel.send({ embeds: [hintEmbed] }).catch(() => {});
+    await sendEmbed(message.channel, 0xF1C40F, '🎵 Gunakan: `!play <judul lagu atau URL YouTube>`');
     return true;
   }
 
-  const voiceChannel = message.member?.voice?.channel;
-  if (!voiceChannel) {
-    const errorEmbed = new EmbedBuilder()
-      .setColor(0xED4245)
-      .setDescription('⚠️ Masuk voice channel terlebih dahulu!');
-    await message.channel.send({ embeds: [errorEmbed] }).catch(() => {});
-    return true;
-  }
+  const voiceChannel = await requireVoice(message);
+  if (!voiceChannel) return true;
 
   const wait = cooldownLeft(message.author.id);
   if (wait) {
@@ -249,4 +312,9 @@ module.exports = {
   PLAY_TRIGGER,
   SKIP_TRIGGER,
   QUEUE_TRIGGER,
+  SHUFFLE_TRIGGER,
+  LOOP_TRIGGER,
+  REMOVE_TRIGGER,
+  LOOP_LABELS,
+  parseLoopMode,
 };
