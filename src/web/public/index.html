@@ -155,22 +155,20 @@
     .pl-add { display: flex; gap: 8px; margin: 20px 0 16px; }
     .pl-add .field { flex: 1; }
     .field input.plain { font-family: var(--font); }
-    .songs { padding-left: 28px; }
+    .songs { list-style: none; padding-left: 0; }
     .pl-detail .empty { margin-top: 0; }
     .songs li { padding: 10px 0; border-bottom: 1px solid var(--rule); }
-    .songs li[draggable="true"] { cursor: grab; }
-    .songs li.dragging { opacity: .45; }
-    .songs li.drag-over { box-shadow: inset 0 2px 0 var(--primary); }
-    .songs li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
-    .song { display: flex; align-items: center; gap: 8px; }
+    .songs li[draggable="true"] { cursor: grab; user-select: none; }
+    .songs li.dragging { opacity: .4; }
+    .songs li.drag-top { box-shadow: inset 0 2px 0 var(--primary); }
+    .songs li.drag-bottom { box-shadow: inset 0 -2px 0 var(--primary); }
+    .song { display: flex; align-items: center; gap: 10px; }
+    .grip { color: var(--faint); flex: none; display: grid; place-items: center; letter-spacing: -1px; font-size: 13px; line-height: 1; }
+    .songs li:hover .grip { color: var(--muted); }
+    .song .idx { min-width: 22px; text-align: right; color: var(--faint); flex: none; }
     .song a { flex: 1; min-width: 0; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .song a:hover { text-decoration: underline; }
-    .song .dur { color: var(--muted); flex: none; margin-right: 4px; }
-    .song-order { display: flex; gap: 2px; flex: none; }
-    .move { width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
-      display: grid; place-items: center; font-weight: 600; }
-    .move:hover:not(:disabled) { background: var(--tint); color: var(--text); }
-    .move:disabled { opacity: .3; cursor: default; }
+    .song .dur { color: var(--muted); flex: none; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
     .btn-danger { background: var(--negative); color: var(--ground); border-color: var(--negative); }
     .btn-danger:hover { opacity: .9; background: var(--negative); }
@@ -780,17 +778,14 @@
         </form>
         ${pl.songs.length
           ? `<ol class="songs" id="pl-songs">${pl.songs.map((s, i) => `
-              <li draggable="${pl.songs.length > 1}"
-                  ondragstart="onSongDragStart(event, ${i})" ondragover="onSongDragOver(event)"
+              <li draggable="${pl.songs.length > 1}"${pl.songs.length > 1 ? ' title="Seret untuk ubah urutan"' : ''}
+                  ondragstart="onSongDragStart(event, ${i})" ondragover="onSongDragOver(event, ${i})"
                   ondragleave="onSongDragLeave(event)" ondrop="onSongDrop(event, ${i})" ondragend="onSongDragEnd()">
                 <div class="song">
-                  <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+                  ${pl.songs.length > 1 ? '<span class="grip" aria-hidden="true">⋮⋮</span>' : ''}
+                  <span class="idx num">${i + 1}.</span>
+                  <a href="${esc(s.url)}" target="_blank" rel="noopener" draggable="false">${esc(s.title)}</a>
                   <span class="dur num">${esc(s.duration)}</span>
-                  ${pl.songs.length > 1 ? `
-                    <span class="song-order">
-                      <button class="move" type="button" onclick="moveSong(${i}, ${i - 1})" ${i === 0 ? 'disabled' : ''} aria-label="Naikkan urutan" title="Naik">↑</button>
-                      <button class="move" type="button" onclick="moveSong(${i}, ${i + 1})" ${i === pl.songs.length - 1 ? 'disabled' : ''} aria-label="Turunkan urutan" title="Turun">↓</button>
-                    </span>` : ''}
                   <button class="link danger" onclick="removeSong(${i})">Hapus</button>
                 </div>
               </li>`).join('')}</ol>`
@@ -834,28 +829,41 @@
     }
 
     let dragSongIdx = null;
+    const clearSongDropMarks = () =>
+      document.querySelectorAll('#pl-songs li').forEach(el => el.classList.remove('drag-top', 'drag-bottom'));
+    const songDropIndex = (from, i, rect, clientY) => {
+      const insertAt = clientY > rect.top + rect.height / 2 ? i + 1 : i;
+      return insertAt > from ? insertAt - 1 : insertAt;
+    };
     function onSongDragStart(e, i) {
       dragSongIdx = i;
       e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(i));
       e.currentTarget.classList.add('dragging');
     }
-    function onSongDragOver(e) {
+    function onSongDragOver(e, i) {
       if (dragSongIdx === null) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      e.currentTarget.classList.add('drag-over');
+      clearSongDropMarks();
+      if (dragSongIdx === i) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      e.currentTarget.classList.add(e.clientY > rect.top + rect.height / 2 ? 'drag-bottom' : 'drag-top');
     }
-    function onSongDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+    function onSongDragLeave(e) {
+      if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drag-top', 'drag-bottom');
+    }
     function onSongDrop(e, i) {
       e.preventDefault();
-      e.currentTarget.classList.remove('drag-over');
       const from = dragSongIdx;
       dragSongIdx = null;
-      if (from !== null && from !== i) moveSong(from, i);
+      const to = from !== null ? songDropIndex(from, i, e.currentTarget.getBoundingClientRect(), e.clientY) : null;
+      clearSongDropMarks();
+      if (to !== null && to !== from) moveSong(from, to);
     }
     function onSongDragEnd() {
       dragSongIdx = null;
-      document.querySelectorAll('#pl-songs li').forEach(el => el.classList.remove('dragging', 'drag-over'));
+      document.querySelectorAll('#pl-songs li').forEach(el => el.classList.remove('dragging', 'drag-top', 'drag-bottom'));
     }
 
     async function moveSong(from, to) {

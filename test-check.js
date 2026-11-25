@@ -546,7 +546,14 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
         ['A', 'C', 'B']
       );
     }
-    assert.ok(uiSrc.includes('renamePlaylist()') && uiSrc.includes('moveSong('));
+    assert.ok(uiSrc.includes('renamePlaylist()') && uiSrc.includes('moveSong(') && !uiSrc.includes('class="song-order"'));
+    const songDropIndex = new Function(
+      uiSrc.slice(uiSrc.indexOf('const songDropIndex'), uiSrc.indexOf('function onSongDragStart')) + ';return songDropIndex')();
+    assert.strictEqual(songDropIndex(0, 1, { top: 100, height: 40 }, 130), 1); // drag 0 below 1 -> 1
+    assert.strictEqual(songDropIndex(0, 2, { top: 100, height: 40 }, 110), 1); // drag 0 above 2 -> 1
+    assert.strictEqual(songDropIndex(0, 2, { top: 100, height: 40 }, 130), 2); // drag 0 below 2 -> 2
+    assert.strictEqual(songDropIndex(2, 0, { top: 100, height: 40 }, 110), 0); // drag 2 above 0 -> 0
+    assert.strictEqual(songDropIndex(2, 0, { top: 100, height: 40 }, 130), 1); // drag 2 below 0 -> 1
     assert.ok(uiSrc.includes('.pin-box:focus-within .slot.cur { background: var(--text);') && uiSrc.includes('@keyframes pin-blink'));
     assert.ok(uiSrc.includes("i === len ? ' cur' : ''"));
 
