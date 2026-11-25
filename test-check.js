@@ -547,6 +547,8 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       );
     }
     assert.ok(uiSrc.includes('renamePlaylist()') && uiSrc.includes('moveSong('));
+    assert.ok(uiSrc.includes('.pin-box:focus-within .slot.cur { background: var(--text);') && uiSrc.includes('@keyframes pin-blink'));
+    assert.ok(uiSrc.includes("i === len ? ' cur' : ''"));
 
     // Loudness normalization & seek stream: verify real ffmpeg output (skipped without ffmpeg)
     const { spawn, spawnSync } = require('node:child_process');

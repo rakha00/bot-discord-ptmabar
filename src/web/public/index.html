@@ -200,6 +200,8 @@
       color: transparent; caret-color: transparent; }
     .slot { width: 12px; height: 12px; border-radius: 50%; background: var(--control); transition: background .12s, transform .12s; }
     .slot.on { background: var(--text); transform: scale(1.1); }
+    .pin-box:focus-within .slot.cur { background: var(--text); animation: pin-blink 1s steps(1, end) infinite; }
+    @keyframes pin-blink { 0%, 49% { background: var(--text); } 50%, 100% { background: var(--control); } }
     @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
     .login .btn { width: 100%; justify-content: center; height: 44px; }
     .login .login-error { color: var(--negative); margin-top: 12px; }
@@ -235,7 +237,7 @@
       .upload-foot { flex-direction: column; align-items: stretch; }
       .upload-actions .btn { flex: 1; justify-content: center; height: 44px; }
     }
-    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   </style>
 </head>
 <body>
@@ -386,7 +388,9 @@
           box.classList.remove('error');
           void box.offsetWidth; // restart the shake
           box.classList.add('error');
-          document.getElementById('pin-field').value = '';
+          const pinField = document.getElementById('pin-field');
+          pinField.value = '';
+          pinField.focus();
           renderPin();
         }
       } catch (err) {
@@ -394,12 +398,12 @@
       }
     }
 
-    // Six slots; one filled dot per typed digit.
+    // Six slots; one filled dot per typed digit, and the next empty slot blinks while focused.
     function renderPin() {
       const len = document.getElementById('pin-field').value.length;
       if (len) document.getElementById('pin-box').classList.remove('error');
       document.getElementById('pin-slots').innerHTML =
-        Array.from({ length: 6 }, (_, i) => `<span class="slot${i < len ? ' on' : ''}"></span>`).join('');
+        Array.from({ length: 6 }, (_, i) => `<span class="slot${i < len ? ' on' : i === len ? ' cur' : ''}"></span>`).join('');
     }
 
     function setThemeLabel() {
