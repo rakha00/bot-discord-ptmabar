@@ -70,8 +70,21 @@ function searchYouTube(query) {
   });
 }
 
+function getStreamInfo(rawInfo) {
+  if (!rawInfo) return null;
+  try {
+    const info = JSON.parse(rawInfo);
+    if (info.is_live) return null;
+    const url = info.url || info.requested_formats?.[0]?.url;
+    return url ? { url, userAgent: info.http_headers?.['User-Agent'], ...(info.duration ? { duration: info.duration } : {}) } : null;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   searchYouTube,
   isYouTubeUrl,
+  getStreamInfo,
   AUDIO_FORMAT,
 };

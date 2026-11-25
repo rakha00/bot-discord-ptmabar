@@ -273,7 +273,21 @@ assert.strictEqual(typeof getQueue, 'function');
 console.log('✔ YouTube Music playback, queue, skip logic & embed schemas valid');
 
 // 7. Test Web Soundboard Manager (Auth, Endpoints, Upload, Rename, Delete)
-const { createWebServer, sanitizeName, renamePlaylistInMap, reorderPlaylistSongsInMap, getPin, SOUNDS_DIR, normalizeSound } = require('./src/web/server');
+const {
+  createWebServer,
+  sanitizeName,
+  parseTimestamp,
+  validateClipRange,
+  buildClipFfmpegArgs,
+  clipFromStream,
+  MIN_CLIP_SEC,
+  MAX_CLIP_SEC,
+  renamePlaylistInMap,
+  reorderPlaylistSongsInMap,
+  getPin,
+  SOUNDS_DIR,
+  normalizeSound,
+} = require('./src/web/server');
 const path = require('node:path');
 
 // Test sanitization & PIN logic
@@ -299,8 +313,17 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
 (async () => {
   // Playlists go to a scratch file, and song lookups use a fake instead of yt-dlp
   process.env.PLAYLISTS_FILE = path.join(require('node:os').tmpdir(), `playlists_test_${process.pid}.json`);
-  const fakeSearch = async q => ({ title: `Lagu ${q}`, url: `https://www.youtube.com/watch?v=${q}`, duration: '3:00' });
-  const server = createWebServer({ search: fakeSearch });
+  const fakeSearch = async q => ({
+    title: `Lagu ${q}`,
+    url: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`,
+    duration: '1:00',
+    info: JSON.stringify({ url: 'https://cdn.example/audio.webm', duration: 60, is_live: q.includes('live') }),
+  });
+  const fakeClip = async (_stream, _start, _dur, destPath) => {
+    fs.writeFileSync(destPath, Buffer.from('ID3fake-clip'));
+    return { size: 12 };
+  };
+  const server = createWebServer({ search: fakeSearch, clip: fakeClip });
   await new Promise(resolve => server.listen(0, resolve));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -417,6 +440,25 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       });
       assert.strictEqual(resDelete.status, 200);
       assert.ok(!fs.existsSync(renamedFile), 'File test_unit_sb_renamed.mp3 harus terhapus');
+
+      // 8b. YouTube Clip API (info + clip validation + clip creation)
+      assert.strictEqual((await fetch(`${baseUrl}/api/youtube/info?url=${encodeURIComponent('http://127.0.0.1/bad')}`, { headers: { 'X-Pin': '280303' } })).status, 400);
+      const resYtInfo = await fetch(`${baseUrl}/api/youtube/info?url=${encodeURIComponent('https://youtu.be/abc')}`, { headers: { 'X-Pin': '280303' } });
+      assert.strictEqual(resYtInfo.status, 200);
+      assert.strictEqual((await resYtInfo.json()).durationSec, 60);
+      assert.strictEqual((await fetch(`${baseUrl}/api/sounds/clip`, {
+        method: 'POST',
+        headers: { 'X-Pin': '280303', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'https://youtu.be/abc', start: 0, end: 20, name: 'toolong' }),
+      })).status, 400);
+      const resClip = await fetch(`${baseUrl}/api/sounds/clip`, {
+        method: 'POST',
+        headers: { 'X-Pin': '280303', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'https://youtu.be/abc', start: '0:05', end: '0:12', name: 'test_clip_yt' }),
+      });
+      assert.strictEqual(resClip.status, 200);
+      assert.ok(fs.existsSync(path.join(SOUNDS_DIR, 'test_clip_yt.mp3')));
+      fs.rmSync(path.join(SOUNDS_DIR, 'test_clip_yt.mp3'), { force: true });
 
       // 9. Playlists: create, add songs, list, remove a song, delete
       const call = (url, method = 'GET', body) => fetch(`${baseUrl}${url}`, {
@@ -557,7 +599,33 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
     assert.ok(uiSrc.includes('.pin-box:focus-within .slot.cur { background: var(--text);') && uiSrc.includes('@keyframes pin-blink'));
     assert.ok(uiSrc.includes("i === len ? ' cur' : ''"));
 
-    // Loudness normalization & seek stream: verify real ffmpeg output (skipped without ffmpeg)
+    // YouTube clip timestamp, range validation & UI slider math (always run, including in sandbox)
+    assert.strictEqual(MIN_CLIP_SEC, 0.5);
+    assert.strictEqual(MAX_CLIP_SEC, 15);
+    assert.strictEqual(parseTimestamp('45'), 45);
+    assert.strictEqual(parseTimestamp('1:23.5'), 83.5);
+    assert.strictEqual(parseTimestamp('1:02:03'), 3723);
+    assert.strictEqual(parseTimestamp('1:65'), null);
+    assert.strictEqual(parseTimestamp('-2'), null);
+    assert.deepStrictEqual(validateClipRange('0:05', '0:15', 60), { start: 5, end: 15, duration: 10 });
+    assert.deepStrictEqual(validateClipRange(55, 61, 60.4), { start: 55, end: 60.4, duration: 5.4 });
+    assert.ok(validateClipRange(0, 0.2, 60).error);
+    assert.ok(validateClipRange(0, 15.1, 60).error);
+    assert.ok(validateClipRange(65, 70, 60).error);
+    const clipArgs = buildClipFfmpegArgs('https://cdn.example/a.webm', 5, 10, '/tmp/out.mp3', 'UA/1');
+    assert.ok(clipArgs.includes('-reconnect') && clipArgs.includes('-user_agent') && clipArgs.includes('-t'));
+
+    const { fmtClipTime, parseClipTime, adjustClipRange } = new Function(
+      'const MIN_CLIP = 0.5, MAX_CLIP = 15;\n' +
+      uiSrc.slice(uiSrc.indexOf('function fmtClipTime'), uiSrc.indexOf('function openClipPanel')) +
+      ';return { fmtClipTime, parseClipTime, adjustClipRange }')();
+    assert.strictEqual(fmtClipTime(75.5), '1:15.5');
+    assert.strictEqual(parseClipTime('1:15.5'), 75.5);
+    assert.deepStrictEqual(adjustClipRange('end', 25, 0, 10, 60), { start: 10, end: 25 }, 'clamps window to 15s when dragging end');
+    assert.deepStrictEqual(adjustClipRange('start', 0, 10, 25, 60), { start: 0, end: 15 }, 'clamps window to 15s when dragging start');
+    assert.deepStrictEqual(adjustClipRange('move', 55, 10, 20, 60), { start: 50, end: 60 }, 'slides 10s window within video end');
+
+    // Loudness normalization, seek stream & YouTube clip pipeline: verify real ffmpeg output (skipped without ffmpeg)
     const { spawn, spawnSync } = require('node:child_process');
     const os = require('node:os');
     if (!spawnSync('ffmpeg', ['-version']).error) {
@@ -584,6 +652,14 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       const dur = Number(durOut);
       assert.ok(dur > 0.5 && dur < 1.5, `seeked clip should be ~1 s, got ${dur}`);
       fs.rmSync(seekedOgg, { force: true });
+
+      // Clip 2 s (0.5 s .. 2.5 s) from local 3 s MP3 -> valid MP3 ~2 s & ~-20 LUFS
+      const clippedMp3 = path.join(os.tmpdir(), `clipped_${process.pid}.mp3`);
+      const clipped = await clipFromStream({ url: out }, 0.5, 2, clippedMp3);
+      assert.ok(clipped.size > 0 && clipped.size <= 500 * 1024);
+      const clipDur = Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', clippedMp3], { encoding: 'utf8' }).stdout.trim());
+      assert.ok(clipDur > 1.5 && clipDur < 2.5, `clipped mp3 should be ~2 s, got ${clipDur}`);
+      fs.rmSync(clippedMp3, { force: true });
       fs.rmSync(out, { force: true });
     }
 

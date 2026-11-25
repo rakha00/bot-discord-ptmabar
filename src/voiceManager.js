@@ -13,7 +13,7 @@ const {
   demuxProbe,
 } = require('@discordjs/voice');
 const { splitText, getAudioResource } = require('./tts');
-const { AUDIO_FORMAT, searchYouTube } = require('./youtube');
+const { AUDIO_FORMAT, searchYouTube, getStreamInfo } = require('./youtube');
 
 const INFO_MAX_AGE_MS = 5 * 60 * 60 * 1000; // YouTube stream URLs expire after ~6 h
 
@@ -152,18 +152,6 @@ function prefetchNext(guildData) {
     .then(video => { next.info = video.info; next.resolvedAt = video.resolvedAt; })
     .catch(err => console.warn('[Prefetch] Gagal menyiapkan lagu berikutnya:', err.message))
     .finally(() => { next.prefetching = false; });
-}
-
-function getStreamInfo(rawInfo) {
-  if (!rawInfo) return null;
-  try {
-    const info = JSON.parse(rawInfo);
-    if (info.is_live) return null;
-    const url = info.url || info.requested_formats?.[0]?.url;
-    return url ? { url, userAgent: info.http_headers?.['User-Agent'], ...(info.duration ? { duration: info.duration } : {}) } : null;
-  } catch {
-    return null;
-  }
 }
 
 function buildSeekFfmpegArgs(streamUrl, seekSec, userAgent) {

@@ -76,10 +76,26 @@
     .subline { color: var(--muted); margin-top: 4px; }
     .subline code { font-family: var(--mono); color: var(--text); white-space: nowrap; }
 
-    /* Upload panel (shown once a file is picked or dropped) */
+    /* Upload & Clip panels */
+    .sb-actions { display: flex; gap: 8px; flex: none; }
     .upload { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); margin-bottom: var(--gap); }
     .upload-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; }
     .upload label { display: block; font-weight: 500; margin-bottom: 8px; }
+    .clip-url { display: flex; gap: 8px; }
+    .clip-url .field { flex: 1; }
+    .clip-editor { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); display: grid; gap: 14px; }
+    .clip-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .clip-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .clip-total { color: var(--muted); flex: none; }
+    .clip-track { position: relative; height: 32px; display: flex; align-items: center; cursor: pointer; touch-action: none; user-select: none; }
+    .clip-rail { position: relative; width: 100%; height: 6px; border-radius: 999px; background: var(--raised); }
+    .clip-fill { position: absolute; top: 0; height: 100%; min-width: 10px; border-radius: 999px; background: var(--primary); cursor: grab; }
+    .clip-fill:active { cursor: grabbing; }
+    .clip-handle { position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%; background: var(--surface);
+      border: 3px solid var(--primary); transform: translate(-50%, -50%); cursor: ew-resize; z-index: 2; padding: 0; }
+    .clip-handle:hover, .clip-handle.active { transform: translate(-50%, -50%) scale(1.12); z-index: 3; }
+    .clip-times { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+    .clip-dur { color: var(--muted); padding-bottom: 10px; white-space: nowrap; }
     .field { display: flex; align-items: center; height: 40px; background: var(--ground); border: 1px solid var(--control); border-radius: 10px; padding: 0 12px; }
     .field:focus-within { border-color: var(--text); }
     .field .prefix { font-family: var(--mono); color: var(--faint); margin-right: 6px; }
@@ -233,7 +249,11 @@
       .sub-meta { display: block; }
       .actions { grid-column: 2 / -1; justify-content: flex-start; margin-left: -8px; }
       .upload-foot { flex-direction: column; align-items: stretch; }
-      .upload-actions .btn { flex: 1; justify-content: center; height: 44px; }
+      .upload-actions .btn, .sb-actions .btn { flex: 1; justify-content: center; height: 44px; }
+      .clip-url { flex-direction: column; }
+      .clip-url .btn { justify-content: center; height: 44px; }
+      .clip-times { grid-template-columns: 1fr 1fr; }
+      .clip-dur { grid-column: 1 / -1; padding-bottom: 0; }
     }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   </style>
@@ -296,12 +316,60 @@
         <p class="subline" id="subline">Memuat sound…</p>
         <p class="subline" id="pl-subline" hidden>Memuat playlist…</p>
       </div>
-      <button class="btn btn-primary" id="sb-action" onclick="document.getElementById('file-input').click()">Upload sound</button>
+      <div class="sb-actions" id="sb-actions">
+        <button class="btn" type="button" onclick="openClipPanel()">Clip YouTube</button>
+        <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">Upload sound</button>
+      </div>
       <button class="btn btn-primary" id="pl-action" hidden onclick="createPlaylist()">Buat playlist</button>
     </div>
 
     <section id="view-soundboard">
     <input type="file" id="file-input" accept="audio/mpeg,.mp3" hidden onchange="onFileSelected(this.files[0])" />
+
+    <form class="upload" id="clip-panel" hidden onsubmit="event.preventDefault(); startClip()">
+      <label for="clip-url">Link YouTube</label>
+      <div class="clip-url">
+        <div class="field"><input class="plain" type="url" id="clip-url" placeholder="https://www.youtube.com/watch?v=... atau https://youtu.be/..." autocomplete="off" onpaste="setTimeout(fetchClipInfo, 0)" /></div>
+        <button class="btn" id="clip-fetch-btn" type="button" onclick="fetchClipInfo()">Cek video</button>
+      </div>
+      <div class="clip-editor" id="clip-editor" hidden>
+        <div class="clip-meta">
+          <span class="clip-title" id="clip-title"></span>
+          <span class="clip-total num" id="clip-total"></span>
+        </div>
+        <div id="clip-range-wrap">
+          <div class="clip-track" id="clip-track" onpointerdown="onClipTrackDown(event)">
+            <div class="clip-rail">
+              <div class="clip-fill" id="clip-fill" onpointerdown="onClipHandleDown(event, 'move')"></div>
+              <button type="button" class="clip-handle" id="clip-h-start" aria-label="Geser waktu mulai" onpointerdown="onClipHandleDown(event, 'start')"></button>
+              <button type="button" class="clip-handle" id="clip-h-end" aria-label="Geser waktu selesai" onpointerdown="onClipHandleDown(event, 'end')"></button>
+            </div>
+          </div>
+        </div>
+        <div class="clip-times">
+          <div>
+            <label for="clip-start">Mulai</label>
+            <div class="field"><input id="clip-start" value="0:00" autocomplete="off" onchange="onClipInputChange('start')" /></div>
+          </div>
+          <div>
+            <label for="clip-end">Selesai</label>
+            <div class="field"><input id="clip-end" value="0:10" autocomplete="off" onchange="onClipInputChange('end')" /></div>
+          </div>
+          <span class="clip-dur num" id="clip-dur"></span>
+        </div>
+        <div>
+          <label for="clip-name-input">Nama command</label>
+          <div class="field"><span class="prefix">!sb</span><input type="text" id="clip-name-input" placeholder="nama" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="keepName(this)" /></div>
+        </div>
+      </div>
+      <div class="upload-foot">
+        <p class="file-meta" id="clip-hint">Maksimal 15 detik per clip.</p>
+        <div class="upload-actions">
+          <button class="btn" type="button" onclick="resetClip()">Batal</button>
+          <button class="btn btn-primary" id="clip-submit-btn" type="submit" disabled>Buat clip</button>
+        </div>
+      </div>
+    </form>
 
     <form class="upload" id="upload-panel" hidden onsubmit="event.preventDefault(); startUpload()">
       <label for="sound-name-input">Nama command</label>
@@ -462,6 +530,7 @@
       if (!file.name.toLowerCase().endsWith('.mp3')) return showToast('File harus berformat .mp3', true);
       if (file.size > 500 * 1024) return showToast(`File ${fmtKB(file.size)} KB, maksimal 500 KB`, true);
 
+      resetClip();
       selectedFile = file;
       const nameInput = document.getElementById('sound-name-input');
       nameInput.value = cleanName(file.name.replace(/\.[^/.]+$/, ''));
@@ -509,6 +578,200 @@
       } finally {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Simpan sound';
+      }
+    }
+
+    // ---- Clip Soundboard dari YouTube (maks 15 detik) ----
+    const MIN_CLIP = 0.5;
+    const MAX_CLIP = 15;
+    let clipVideo = null;
+    let clipStart = 0;
+    let clipEnd = 10;
+
+    function fmtClipTime(sec) {
+      const m = Math.floor(sec / 60);
+      const rem = Math.round((sec - m * 60) * 10) / 10;
+      const whole = Math.floor(rem);
+      const frac = Math.round((rem - whole) * 10);
+      return `${m}:${String(whole).padStart(2, '0')}${frac ? `.${frac}` : ''}`;
+    }
+
+    function parseClipTime(str) {
+      const s = String(str ?? '').trim();
+      if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
+      const parts = s.split(':');
+      if ((parts.length !== 2 && parts.length !== 3) || !parts.every(p => /^\d+(?:\.\d+)?$/.test(p))) return null;
+      const nums = parts.map(Number);
+      if (nums.slice(1).some(n => n >= 60)) return null;
+      return parts.length === 2 ? nums[0] * 60 + nums[1] : nums[0] * 3600 + nums[1] * 60 + nums[2];
+    }
+
+    function adjustClipRange(mode, val, curStart, curEnd, total, minLen = MIN_CLIP, maxLen = MAX_CLIP) {
+      const round1 = n => Math.round(n * 10) / 10;
+      const cap = total > 0 ? total : Infinity;
+      const effMin = Math.min(minLen, cap);
+      let s = curStart, e = curEnd;
+      if (mode === 'move') {
+        const span = Math.min(maxLen, Math.max(effMin, curEnd - curStart));
+        s = Math.max(0, Math.min(val, Math.max(0, cap - span)));
+        e = Math.min(cap, s + span);
+      } else if (mode === 'start') {
+        s = Math.max(0, Math.min(val, Math.max(0, cap - effMin)));
+        if (e - s < effMin) e = Math.min(cap, s + effMin);
+        if (e - s > maxLen) e = s + maxLen;
+      } else {
+        e = Math.max(effMin, Math.min(val, cap));
+        if (e - s < effMin) s = Math.max(0, e - effMin);
+        if (e - s > maxLen) s = e - maxLen;
+      }
+      return { start: round1(s), end: round1(e) };
+    }
+
+    function openClipPanel() {
+      resetUpload();
+      document.getElementById('clip-panel').hidden = false;
+      document.getElementById('clip-url').focus();
+    }
+
+    function resetClip() {
+      clipVideo = null;
+      document.getElementById('clip-panel').hidden = true;
+      document.getElementById('clip-editor').hidden = true;
+      document.getElementById('clip-url').value = '';
+      document.getElementById('clip-name-input').value = '';
+      document.getElementById('clip-submit-btn').disabled = true;
+    }
+
+    function renderClipRange() {
+      const dur = Math.max(0, Math.round((clipEnd - clipStart) * 10) / 10);
+      document.getElementById('clip-start').value = fmtClipTime(clipStart);
+      document.getElementById('clip-end').value = fmtClipTime(clipEnd);
+      document.getElementById('clip-dur').textContent = `Durasi: ${dur} dtk (maks ${MAX_CLIP})`;
+
+      const total = clipVideo?.durationSec || 0;
+      document.getElementById('clip-range-wrap').hidden = total <= 0;
+      if (total > 0) {
+        const left = (clipStart / total) * 100;
+        const right = (clipEnd / total) * 100;
+        const fill = document.getElementById('clip-fill');
+        fill.style.left = `${left}%`;
+        fill.style.width = `${Math.max(0, right - left)}%`;
+        document.getElementById('clip-h-start').style.left = `${left}%`;
+        document.getElementById('clip-h-end').style.left = `${right}%`;
+      }
+    }
+
+    async function fetchClipInfo() {
+      const url = document.getElementById('clip-url').value.trim();
+      if (!url) return;
+      const btn = document.getElementById('clip-fetch-btn');
+      btn.disabled = true;
+      btn.textContent = 'Memeriksa…';
+      try {
+        const info = await api(`/api/youtube/info?url=${encodeURIComponent(url)}`);
+        clipVideo = info;
+        clipStart = 0;
+        clipEnd = info.durationSec > 0 ? Math.min(10, info.durationSec) : 10;
+        document.getElementById('clip-title').textContent = info.title;
+        document.getElementById('clip-total').textContent = info.duration || '';
+        document.getElementById('clip-editor').hidden = false;
+        document.getElementById('clip-submit-btn').disabled = false;
+        const nameInput = document.getElementById('clip-name-input');
+        if (!nameInput.value) nameInput.value = cleanName(info.title).slice(0, 20);
+        renderClipRange();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Cek video';
+      }
+    }
+
+    function onClipInputChange(which) {
+      const total = clipVideo?.durationSec || 0;
+      const parsed = parseClipTime(document.getElementById(which === 'start' ? 'clip-start' : 'clip-end').value);
+      if (parsed === null) return renderClipRange();
+      const next = adjustClipRange(which, parsed, clipStart, clipEnd, total);
+      clipStart = next.start;
+      clipEnd = next.end;
+      renderClipRange();
+    }
+
+    function onClipTrackDown(e) {
+      if (e.target.closest('.clip-handle, .clip-fill')) return;
+      const total = clipVideo?.durationSec || 0;
+      if (total <= 0) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clicked = ((e.clientX - rect.left) / rect.width) * total;
+      const span = clipEnd - clipStart;
+      const next = adjustClipRange('move', Math.round((clicked - span / 2) * 2) / 2, clipStart, clipEnd, total);
+      clipStart = next.start;
+      clipEnd = next.end;
+      renderClipRange();
+    }
+
+    function onClipHandleDown(e, mode) {
+      e.preventDefault();
+      e.stopPropagation();
+      const total = clipVideo?.durationSec || 0;
+      if (total <= 0) return;
+      const track = document.getElementById('clip-track');
+      const rect = track.getBoundingClientRect();
+      const originX = e.clientX;
+      const origStart = clipStart;
+      const origEnd = clipEnd;
+      const activeHandle = mode !== 'move' ? e.currentTarget : null;
+      if (activeHandle) activeHandle.classList.add('active');
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+
+      const onMove = ev => {
+        const deltaSec = ((ev.clientX - originX) / rect.width) * total;
+        const raw = mode === 'move' ? origStart + deltaSec : (mode === 'start' ? origStart + deltaSec : origEnd + deltaSec);
+        const snapped = Math.round(raw * 2) / 2;
+        const next = adjustClipRange(mode, snapped, origStart, origEnd, total);
+        clipStart = next.start;
+        clipEnd = next.end;
+        renderClipRange();
+      };
+      const onUp = () => {
+        if (activeHandle) activeHandle.classList.remove('active');
+        removeEventListener('pointermove', onMove);
+        removeEventListener('pointerup', onUp);
+        removeEventListener('pointercancel', onUp);
+      };
+      addEventListener('pointermove', onMove);
+      addEventListener('pointerup', onUp);
+      addEventListener('pointercancel', onUp);
+    }
+
+    async function startClip() {
+      if (!clipVideo) return fetchClipInfo();
+      const soundName = cleanName(document.getElementById('clip-name-input').value);
+      if (!soundName) return showToast('Nama hanya boleh huruf, angka, - dan _', true);
+      if (currentSounds.some(s => s.name === soundName) && !await ask({
+        title: `Timpa "${soundName}"?`,
+        message: `Sound dengan nama ini sudah ada dan akan diganti dengan clip baru.`,
+        confirm: 'Timpa', danger: true,
+      })) return;
+
+      const btn = document.getElementById('clip-submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Memproses…';
+      try {
+        const data = await api('/api/sounds/clip', 'POST', {
+          url: clipVideo.url,
+          start: clipStart,
+          end: clipEnd,
+          name: soundName,
+        });
+        showToast(`!sb ${data.name} siap dipakai`);
+        resetClip();
+        loadSounds();
+      } catch (err) {
+        showToast(err.message, true);
+        btn.disabled = false;
+      } finally {
+        btn.textContent = 'Buat clip';
       }
     }
 
@@ -702,7 +965,7 @@
       document.getElementById('view-soundboard').hidden = view !== 'soundboard';
       document.getElementById('view-playlist').hidden = view !== 'playlist';
       document.getElementById('view-title').textContent = view === 'playlist' ? 'Playlist' : 'Soundboard';
-      for (const id of ['subline', 'sb-action']) document.getElementById(id).hidden = view !== 'soundboard';
+      for (const id of ['subline', 'sb-actions']) document.getElementById(id).hidden = view !== 'soundboard';
       for (const id of ['pl-subline', 'pl-action']) document.getElementById(id).hidden = view !== 'playlist';
       document.querySelectorAll('.tabs a').forEach(a => {
         if (a.getAttribute('href') === '#' + view) a.setAttribute('aria-current', 'page');

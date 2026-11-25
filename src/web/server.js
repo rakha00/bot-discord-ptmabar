@@ -4,11 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { loadPlaylists, savePlaylists } = require('../playlists');
-const { searchYouTube } = require('../youtube');
+const { searchYouTube, isYouTubeUrl, getStreamInfo } = require('../youtube');
 
 const SOUNDS_DIR = path.join(__dirname, '..', '..', 'sounds');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_UPLOAD_BYTES = 500 * 1024; // 500 KB per sound
+const MIN_CLIP_SEC = 0.5;
+const MAX_CLIP_SEC = 15;
+const CLIP_TIMEOUT_MS = 30_000;
+const YT_CACHE_TTL_MS = 10 * 60 * 1000;
 
 // Every sound is levelled to the same loudness so no clip is much louder than another.
 // -20 LUFS sits near voice-chat level; the true-peak cap keeps loud memes from clipping.
@@ -49,6 +53,102 @@ function looksLikeMp3(file) {
   const fd = fs.openSync(file, 'r');
   try { fs.readSync(fd, head, 0, 3, 0); } finally { fs.closeSync(fd); }
   return head.toString('latin1') === 'ID3' || (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0);
+}
+
+function parseTimestamp(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : null;
+  }
+  const s = String(value ?? '').trim();
+  if (!s) return null;
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Math.round(Number(s) * 100) / 100;
+  const parts = s.split(':');
+  if (parts.length !== 2 && parts.length !== 3) return null;
+  if (!parts.every((p, i) => (i === parts.length - 1 ? /^\d{1,2}(?:\.\d+)?$/ : /^\d+$/).test(p))) return null;
+  const nums = parts.map(Number);
+  if (nums.slice(1).some(n => n >= 60)) return null;
+  const sec = parts.length === 2 ? nums[0] * 60 + nums[1] : nums[0] * 3600 + nums[1] * 60 + nums[2];
+  return Number.isFinite(sec) ? Math.round(sec * 100) / 100 : null;
+}
+
+function validateClipRange(startRaw, endRaw, videoDuration = 0) {
+  const start = parseTimestamp(startRaw);
+  const end = parseTimestamp(endRaw);
+  if (start === null || end === null) {
+    return { error: 'Format waktu mulai/selesai tidak valid (contoh: 0:45 atau 45).' };
+  }
+  if (videoDuration > 0 && start >= videoDuration) {
+    return { error: 'Waktu mulai melebihi durasi video.' };
+  }
+  const clampedEnd = videoDuration > 0 ? Math.min(end, videoDuration) : end;
+  if (clampedEnd <= start) {
+    return { error: 'Waktu selesai harus lebih besar dari waktu mulai.' };
+  }
+  const duration = Math.round((clampedEnd - start) * 100) / 100;
+  if (duration < MIN_CLIP_SEC) return { error: `Durasi clip minimal ${MIN_CLIP_SEC} detik.` };
+  if (duration > MAX_CLIP_SEC) return { error: `Durasi clip maksimal ${MAX_CLIP_SEC} detik.` };
+  return { start, end: clampedEnd, duration };
+}
+
+function buildClipFfmpegArgs(streamUrl, startSec, durationSec, outPath, userAgent) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+  if (/^https?:\/\//i.test(streamUrl)) {
+    args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5');
+  }
+  if (userAgent) args.push('-user_agent', userAgent);
+  args.push(
+    '-ss', String(startSec),
+    '-i', streamUrl,
+    '-t', String(durationSec),
+    '-vn',
+    '-af', `loudnorm=I=${TARGET_LUFS}:TP=-2:LRA=11`,
+    '-ar', '48000', '-c:a', 'libmp3lame', '-b:a', '128k',
+    outPath
+  );
+  return args;
+}
+
+function clipFromStream(stream, startSec, durationSec, destPath) {
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  const tempPath = path.join(path.dirname(destPath), `.${path.basename(destPath, '.mp3')}_${Date.now()}.clip.mp3`);
+  return new Promise((resolve, reject) => {
+    const ff = spawn('ffmpeg', buildClipFfmpegArgs(stream.url, startSec, durationSec, tempPath, stream.userAgent));
+    let err = '';
+    ff.stderr.on('data', d => { err += d; });
+    const timer = setTimeout(() => { ff.kill(); }, CLIP_TIMEOUT_MS);
+    let done = false;
+    const finish = (ok, errMsg) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (!ok) {
+        fs.rmSync(tempPath, { force: true });
+        return reject(new Error(errMsg || 'Gagal memotong audio dari YouTube'));
+      }
+      try {
+        const size = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
+        if (!size) {
+          fs.rmSync(tempPath, { force: true });
+          return reject(new Error('Clip audio kosong'));
+        }
+        if (size > MAX_UPLOAD_BYTES) {
+          fs.rmSync(tempPath, { force: true });
+          return reject(Object.assign(new Error('Ukuran clip melebihi batas 500 KB'), { status: 413 }));
+        }
+        if (!looksLikeMp3(tempPath)) {
+          fs.rmSync(tempPath, { force: true });
+          return reject(new Error('Hasil clip bukan MP3 yang valid'));
+        }
+        fs.renameSync(tempPath, destPath);
+        resolve({ size });
+      } catch (e) {
+        fs.rmSync(tempPath, { force: true });
+        reject(e);
+      }
+    };
+    ff.on('error', e => finish(false, e.message));
+    ff.on('close', code => finish(code === 0, err.trim().split('\n').pop()));
+  });
 }
 
 // One-off for sounds added before normalization existed: npm run normalize-sounds
@@ -186,8 +286,35 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-// `search` resolves a song title or URL; tests pass a fake so they need no network.
-function createWebServer({ search = searchYouTube } = {}) {
+// `search` resolves a song title or URL; `clip` writes an MP3 clip; tests pass fakes so they need no network.
+function createWebServer({ search = searchYouTube, clip = clipFromStream } = {}) {
+  const ytCache = new Map(); // url -> { video, stream, at }
+  async function resolveYouTubeClipSource(rawUrl) {
+    const key = String(rawUrl || '').trim();
+    if (!isYouTubeUrl(key)) {
+      throw Object.assign(new Error('Hanya URL YouTube yang didukung.'), { status: 400 });
+    }
+    const cached = ytCache.get(key);
+    if (cached && Date.now() - cached.at < YT_CACHE_TTL_MS) return cached;
+
+    let video;
+    try {
+      video = await search(key);
+    } catch (err) {
+      throw Object.assign(new Error(err.message || 'Video YouTube tidak ditemukan'), { status: err.code === 'NOT_YOUTUBE' ? 400 : 404 });
+    }
+    let isLive = false;
+    try { isLive = Boolean(video.info && JSON.parse(video.info).is_live); } catch {}
+    if (isLive) throw Object.assign(new Error('Video live stream tidak bisa di-clip.'), { status: 400 });
+
+    const stream = getStreamInfo(video.info);
+    const entry = { video, stream, at: Date.now() };
+    if (ytCache.size >= 50) ytCache.clear();
+    ytCache.set(key, entry);
+    if (video.url && video.url !== key) ytCache.set(video.url, entry);
+    return entry;
+  }
+
   const route = async (req, res) => {
     // The Host header is the client's; it plays no part in routing.
     const parsedUrl = new URL(req.url, 'http://localhost');
@@ -364,6 +491,48 @@ function createWebServer({ search = searchYouTube } = {}) {
         return;
       }
 
+      // 5b. GET /api/youtube/info & POST /api/sounds/clip: Clip soundboard directly from YouTube
+      if (req.method === 'GET' && pathname === '/api/youtube/info') {
+        const url = parsedUrl.searchParams.get('url') || '';
+        try {
+          const { video, stream } = await resolveYouTubeClipSource(url);
+          const durationSec = stream?.duration || parseTimestamp(video.duration) || 0;
+          return sendJson(res, 200, {
+            title: video.title,
+            url: video.url,
+            duration: video.duration,
+            durationSec,
+          });
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: err.message });
+        }
+      }
+
+      if (req.method === 'POST' && pathname === '/api/sounds/clip') {
+        let body;
+        try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
+        const clean = sanitizeName(body.name);
+        if (!clean) {
+          return sendJson(res, 400, { error: 'Nama sound tidak valid (hanya huruf, angka, dash, dan underscore)' });
+        }
+        try {
+          const { video, stream } = await resolveYouTubeClipSource(body.url);
+          if (!stream?.url) {
+            return sendJson(res, 400, { error: 'Stream audio YouTube tidak tersedia untuk di-clip' });
+          }
+          const durationSec = stream.duration || parseTimestamp(video.duration) || 0;
+          const range = validateClipRange(body.start, body.end, durationSec);
+          if (range.error) return sendJson(res, 400, { error: range.error });
+
+          const targetPath = path.join(SOUNDS_DIR, `${clean}.mp3`);
+          const { size } = await clip(stream, range.start, range.duration, targetPath);
+          console.log(`[Web Soundboard] Clipped "${clean}.mp3" (${range.start}s-${range.end}s, ${size} bytes)`);
+          return sendJson(res, 200, { success: true, name: clean });
+        } catch (err) {
+          return sendJson(res, err.status || 500, { error: err.message || 'Gagal membuat clip' });
+        }
+      }
+
       // 6. DELETE /api/sounds/:name: Delete soundboard file
       if (req.method === 'DELETE' && pathname.startsWith('/api/sounds/')) {
         const targetName = sanitizeName(pathname.replace('/api/sounds/', ''));
@@ -520,6 +689,12 @@ module.exports = {
   createWebServer,
   startWebServer,
   sanitizeName,
+  parseTimestamp,
+  validateClipRange,
+  buildClipFfmpegArgs,
+  clipFromStream,
+  MIN_CLIP_SEC,
+  MAX_CLIP_SEC,
   renamePlaylistInMap,
   reorderPlaylistSongsInMap,
   getPin,
