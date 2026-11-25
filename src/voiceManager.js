@@ -33,6 +33,7 @@ function getGuildData(guildId) {
       player,
       queue: [],
       current: null,
+      currentResource: null,
       isPlaying: false,
       idleTimer: null,
       emptyTimer: null,
@@ -44,6 +45,7 @@ function getGuildData(guildId) {
         guildData.currentProc.kill();
         guildData.currentProc = null;
       }
+      guildData.currentResource = null;
       playNext(guildId);
     });
 
@@ -110,6 +112,8 @@ function checkChannelOccupancy(guild) {
     if (guildData) {
       guildData.isPlaying = false;
       guildData.queue = [];
+      guildData.current = null;
+      guildData.currentResource = null;
       guildData.player.stop();
     }
     return;
@@ -136,9 +140,42 @@ function prefetchNext(guildData) {
     .finally(() => { next.prefetching = false; });
 }
 
+function getStreamInfo(rawInfo) {
+  if (!rawInfo) return null;
+  try {
+    const info = JSON.parse(rawInfo);
+    if (info.is_live) return null;
+    const url = info.url || info.requested_formats?.[0]?.url;
+    return url ? { url, userAgent: info.http_headers?.['User-Agent'], ...(info.duration ? { duration: info.duration } : {}) } : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildSeekFfmpegArgs(streamUrl, seekSec, userAgent) {
+  const args = ['-hide_banner', '-loglevel', 'error'];
+  if (/^https?:\/\//i.test(streamUrl)) {
+    args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5');
+  }
+  if (userAgent) args.push('-user_agent', userAgent);
+  args.push(
+    '-ss', String(seekSec),
+    '-i', streamUrl,
+    '-vn',
+    '-f', 'ogg',
+    '-c:a', 'libopus',
+    '-ar', '48000',
+    '-ac', '2',
+    'pipe:1'
+  );
+  return args;
+}
+
 async function playNext(guildId) {
   const guildData = players.get(guildId);
   if (!guildData) return;
+
+  guildData.currentResource = null;
 
   if (guildData.queue.length === 0) {
     guildData.isPlaying = false;
@@ -162,34 +199,75 @@ async function playNext(guildId) {
         guildData.currentProc.kill();
         guildData.currentProc = null;
       }
-      // Reuse the extraction saved at search time while its stream URLs are still valid (they expire
-      // after ~6 h); otherwise extract again from the video URL.
-      let source = ['--no-playlist', nextItem.url];
-      let infoFile = null;
-      if (nextItem.info && Date.now() - nextItem.resolvedAt < INFO_MAX_AGE_MS) {
-        infoFile = path.join(os.tmpdir(), `yt-${process.pid}-${Date.now()}.json`);
-        fs.writeFileSync(infoFile, nextItem.info);
-        source = ['--load-info-json', infoFile];
+
+      const seekSec = nextItem.seekMs ? Math.floor(nextItem.seekMs / 1000) : 0;
+      const hasFreshInfo = nextItem.info && Date.now() - nextItem.resolvedAt < INFO_MAX_AGE_MS;
+      if (seekSec >= 1 && !hasFreshInfo) {
+        const video = await searchYouTube(nextItem.url);
+        if (guildData.current !== nextItem) return; // superseded while resolving stream URL
+        nextItem.info = video.info;
+        nextItem.resolvedAt = video.resolvedAt;
       }
 
-      // An Opus (WebM) stream is passed straight to Discord by demuxProbe, skipping the FFmpeg decode
-      // and opusscript re-encode. Other formats still go through FFmpeg.
-      const proc = spawn('yt-dlp', ['-f', AUDIO_FORMAT, '--no-warnings', '-o', '-', ...source]);
+      const stream = seekSec >= 1 ? getStreamInfo(nextItem.info) : null;
+      if (stream?.duration && seekSec >= stream.duration) {
+        return playNext(guildId);
+      }
+
+      const spawnYtDlp = () => {
+        // Reuse the extraction saved at search time while its stream URLs are still valid (they expire
+        // after ~6 h); otherwise extract again from the video URL.
+        let source = ['--no-playlist', nextItem.url];
+        let infoFile = null;
+        if (nextItem.info && Date.now() - nextItem.resolvedAt < INFO_MAX_AGE_MS) {
+          infoFile = path.join(os.tmpdir(), `yt-${process.pid}-${Date.now()}.json`);
+          fs.writeFileSync(infoFile, nextItem.info);
+          source = ['--load-info-json', infoFile];
+        }
+        // An Opus (WebM) stream is passed straight to Discord by demuxProbe, skipping the FFmpeg decode
+        // and opusscript re-encode. Other formats still go through FFmpeg.
+        const yt = spawn('yt-dlp', ['-f', AUDIO_FORMAT, '--no-warnings', '-o', '-', ...source]);
+        yt.on('error', (err) => console.error('[yt-dlp Stream Error]:', err.message));
+        if (infoFile) yt.on('close', () => fs.rm(infoFile, { force: true }, () => {}));
+        return yt;
+      };
+
+      let proc;
+      let usedSeek = false;
+      if (stream) {
+        // Direct HTTP Range seek with ffmpeg avoids downloading the whole prefix through a pipe.
+        usedSeek = true;
+        proc = spawn('ffmpeg', buildSeekFfmpegArgs(stream.url, seekSec, stream.userAgent));
+        proc.on('error', (err) => console.error('[FFmpeg Seek Error]:', err.message));
+      } else {
+        proc = spawnYtDlp();
+      }
+
       guildData.currentProc = proc;
-      proc.on('error', (err) => console.error('[yt-dlp Stream Error]:', err.message));
-      if (infoFile) proc.on('close', () => fs.rm(infoFile, { force: true }, () => {}));
       let probed;
       try {
         probed = await demuxProbe(proc.stdout);
       } catch (err) {
         if (guildData.currentProc !== proc) return; // killed by skip/stop/soundboard; they already moved on
-        throw err;
+        if (!usedSeek) throw err;
+        // If ffmpeg cannot range-seek this stream URL, fall back to yt-dlp from 0:00 instead of dropping the song.
+        console.warn('[FFmpeg Seek Fallback] Memutar ulang dari awal:', err.message);
+        proc.kill();
+        proc = spawnYtDlp();
+        guildData.currentProc = proc;
+        try {
+          probed = await demuxProbe(proc.stdout);
+        } catch (fallbackErr) {
+          if (guildData.currentProc !== proc) return;
+          throw fallbackErr;
+        }
       }
       if (guildData.currentProc !== proc) return; // superseded while probing
       resource = createAudioResource(probed.stream, { inputType: probed.type });
       prefetchNext(guildData);
     }
     if (resource) {
+      guildData.currentResource = resource;
       guildData.player.play(resource);
     } else {
       playNext(guildId);
@@ -236,11 +314,14 @@ async function getOrCreateConnection(voiceChannel) {
 // Soundboards and donations cut in right away, ahead of everything else. Only soundboards are
 // throwaway: one still waiting is dropped (so spamming !sb does not pile up), and an interrupted
 // soundboard is not replayed. Whatever else was interrupted (a song, a donation's TTS) goes back
-// to the front and starts again once the new audio is done, and the rest of the queue is kept.
-function queueWithInterrupt(queue, current, items) {
+// to the front (a YouTube song resumes from its last played position) and the rest of the queue is kept.
+function queueWithInterrupt(queue, current, items, playbackDurationMs = 0) {
+  const resumed = current && current.type === 'youtube' && playbackDurationMs > 0
+    ? { ...current, seekMs: (current.seekMs || 0) + playbackDurationMs }
+    : current;
   return [
     ...items,
-    ...(current && !current.soundboard ? [current] : []),
+    ...(resumed && !resumed.soundboard ? [resumed] : []),
     ...queue.filter(item => !item?.soundboard),
   ];
 }
@@ -256,7 +337,9 @@ async function interruptWith(voiceChannel, items) {
     guildData.currentProc.kill();
     guildData.currentProc = null;
   }
-  guildData.queue = queueWithInterrupt(guildData.queue, guildData.current, items);
+  const elapsedMs = guildData.currentResource?.playbackDuration || 0;
+  guildData.currentResource = null;
+  guildData.queue = queueWithInterrupt(guildData.queue, guildData.current, items, elapsedMs);
   guildData.current = null;
 
   if (guildData.player.state.status !== AudioPlayerStatus.Idle) {
@@ -329,6 +412,7 @@ function skipAudio(guildId) {
     guildData.currentProc = null;
   }
 
+  guildData.currentResource = null;
   guildData.player.stop(true);
   return true;
 }
@@ -344,6 +428,7 @@ function stopAudio(guildId) {
 
   guildData.queue = [];
   guildData.current = null;
+  guildData.currentResource = null;
   guildData.isPlaying = false;
   guildData.player.stop(true);
   startIdleTimer(guildId);
@@ -364,6 +449,8 @@ module.exports = {
   playDonation,
   playSoundboard,
   queueWithInterrupt,
+  getStreamInfo,
+  buildSeekFfmpegArgs,
   playMusic,
   skipAudio,
   stopAudio,

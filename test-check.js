@@ -99,7 +99,7 @@ const {
   QUEUE_TRIGGER,
 } = require('./src/commands/play');
 const { searchYouTube } = require('./src/youtube');
-const { playMusic, skipAudio, getQueue, queueWithInterrupt } = require('./src/voiceManager');
+const { playMusic, skipAudio, getQueue, queueWithInterrupt, getStreamInfo, buildSeekFfmpegArgs } = require('./src/voiceManager');
 
 // Soundboards and donations interrupt without wiping the queue
 {
@@ -111,6 +111,14 @@ const { playMusic, skipAudio, getQueue, queueWithInterrupt } = require('./src/vo
   // A soundboard over music: waiting soundboards dropped, the song restarts after it
   assert.deepStrictEqual(label(queueWithInterrupt([oldSb, next], song, [sb('adit.mp3'), sb('adit.mp3')])),
     ['adit.mp3', 'adit.mp3', 'Lagu Satu', 'Lagu Dua']);
+  // Interrupted YouTube songs carry forward their cumulative playback position
+  const firstCut = queueWithInterrupt([next], song, [sb('adit.mp3')], 32_500);
+  assert.strictEqual(firstCut[1].seekMs, 32_500);
+  assert.strictEqual(song.seekMs, undefined, 'does not mutate input song object');
+  const secondCut = queueWithInterrupt([next], firstCut[1], [sb('aduh.mp3')], 15_000);
+  assert.strictEqual(secondCut[1].seekMs, 47_500, 'accumulates across multiple interrupts');
+  const probeCut = queueWithInterrupt([next], firstCut[1], [sb('aduh.mp3')], 0);
+  assert.strictEqual(probeCut[1].seekMs, 32_500, 'keeps seekMs when cut before audio starts');
   // A soundboard over a soundboard does not replay the old one
   assert.deepStrictEqual(label(queueWithInterrupt([song, next], oldSb, [sb('aduh.mp3')])), ['aduh.mp3', 'Lagu Satu', 'Lagu Dua']);
   // A donation over music behaves the same: alert and TTS first, then the song again
@@ -118,8 +126,31 @@ const { playMusic, skipAudio, getQueue, queueWithInterrupt } = require('./src/vo
   assert.deepStrictEqual(label(queueWithInterrupt([next], song, donation)),
     ['alert.mp3', 'tts:Budi donasi 10 ribu', 'Lagu Satu', 'Lagu Dua']);
   // A soundboard over a donation never loses the donation: the cut-off TTS chunk is replayed
-  assert.deepStrictEqual(label(queueWithInterrupt(['bagian 2', song], 'bagian 1', [sb('aduh.mp3')])),
+  assert.deepStrictEqual(label(queueWithInterrupt(['bagian 2', song], 'bagian 1', [sb('aduh.mp3')], 1200)),
     ['aduh.mp3', 'tts:bagian 1', 'tts:bagian 2', 'Lagu Satu']);
+
+  // Stream URL extraction & ffmpeg seek args
+  assert.deepStrictEqual(
+    getStreamInfo(JSON.stringify({ url: 'https://cdn.example/audio.webm', http_headers: { 'User-Agent': 'UA/1' } })),
+    { url: 'https://cdn.example/audio.webm', userAgent: 'UA/1' }
+  );
+  assert.deepStrictEqual(
+    getStreamInfo(JSON.stringify({ requested_formats: [{ url: 'https://cdn.example/f0.webm' }] })),
+    { url: 'https://cdn.example/f0.webm', userAgent: undefined }
+  );
+  assert.strictEqual(getStreamInfo(JSON.stringify({ url: 'https://cdn.example/live', is_live: true })), null);
+  assert.strictEqual(getStreamInfo('not-json'), null);
+
+  const httpsArgs = buildSeekFfmpegArgs('https://cdn.example/a.webm', 42, 'UA/1');
+  assert.ok(httpsArgs.includes('-reconnect') && httpsArgs.includes('-user_agent'));
+  assert.strictEqual(httpsArgs[httpsArgs.indexOf('-ss') + 1], '42');
+  const localArgs = buildSeekFfmpegArgs('/tmp/test.mp3', 3);
+  assert.ok(!localArgs.includes('-reconnect'));
+  assert.strictEqual(localArgs[localArgs.indexOf('-ss') + 1], '3');
+  assert.strictEqual(
+    getStreamInfo(JSON.stringify({ url: 'https://cdn.example/a.webm', duration: 180 })).duration,
+    180
+  );
 }
 
 assert.strictEqual(playSlashCommand.name, 'play');
@@ -426,8 +457,8 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
     assert.strictEqual(el.value, 'aku');
     assert.strictEqual(el.caret, 2);
 
-    // Loudness normalization: a clip at full scale comes out near -20 LUFS (skipped without ffmpeg)
-    const { spawnSync } = require('node:child_process');
+    // Loudness normalization & seek stream: verify real ffmpeg output (skipped without ffmpeg)
+    const { spawn, spawnSync } = require('node:child_process');
     const os = require('node:os');
     if (!spawnSync('ffmpeg', ['-version']).error) {
       const loud = path.join(os.tmpdir(), `.loud_${process.pid}.tmp`);
@@ -439,6 +470,20 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       const lufs = Number(meter.slice(meter.lastIndexOf('Summary')).match(/I:\s+(-?[\d.]+)/)[1]);
       assert.ok(Math.abs(lufs + 20) <= 2.5, `normalized clip should be ~-20 LUFS, got ${lufs}`);
       assert.ok(!fs.existsSync(loud), 'source temp file removed');
+
+      // Seek 2 s into the 3 s clip -> demuxProbe detects ogg/opus and remaining duration is ~1 s
+      const { demuxProbe, StreamType } = require('@discordjs/voice');
+      const seekProc = spawn('ffmpeg', buildSeekFfmpegArgs(out, 2));
+      const probed = await demuxProbe(seekProc.stdout);
+      assert.strictEqual(probed.type, StreamType.OggOpus);
+      const chunks = [];
+      for await (const chunk of probed.stream) chunks.push(chunk);
+      const seekedOgg = path.join(os.tmpdir(), `seek_${process.pid}.ogg`);
+      fs.writeFileSync(seekedOgg, Buffer.concat(chunks));
+      const durOut = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', seekedOgg], { encoding: 'utf8' }).stdout.trim();
+      const dur = Number(durOut);
+      assert.ok(dur > 0.5 && dur < 1.5, `seeked clip should be ~1 s, got ${dur}`);
+      fs.rmSync(seekedOgg, { force: true });
       fs.rmSync(out, { force: true });
     }
 
