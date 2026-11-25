@@ -126,6 +126,39 @@ function sanitizeName(name) {
   return name.toLowerCase().replace(/[^a-z0-9_-]/g, '').trim();
 }
 
+function validatePlaylistName(rawName, playlists) {
+  const name = sanitizeName(rawName);
+  if (!name) return { status: 400, error: 'Nama playlist tidak valid (hanya huruf, angka, dash, underscore)' };
+  // "list" is taken by `!playlist list`, so a playlist with that name could never be played
+  if (name === 'list') return { status: 400, error: 'Nama "list" sudah dipakai untuk !playlist list' };
+  if (playlists[name]) return { status: 409, error: `Playlist "${name}" sudah ada` };
+  return { name };
+}
+
+function renamePlaylistInMap(playlists, oldName, rawNewName) {
+  if (!playlists[oldName]) return { status: 404, error: 'Playlist tidak ditemukan' };
+  const clean = sanitizeName(rawNewName);
+  if (clean === oldName) return { status: 200, name: oldName };
+  const check = validatePlaylistName(rawNewName, playlists);
+  if (check.error) return check;
+  playlists[check.name] = playlists[oldName];
+  delete playlists[oldName];
+  return { status: 200, name: check.name };
+}
+
+function reorderPlaylistSongsInMap(playlists, name, from, to) {
+  const songs = playlists[name];
+  if (!songs) return { status: 404, error: 'Playlist tidak ditemukan' };
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= songs.length || to >= songs.length) {
+    return { status: 400, error: 'Indeks lagu tidak valid' };
+  }
+  if (from !== to) {
+    const [moved] = songs.splice(from, 1);
+    songs.splice(to, 0, moved);
+  }
+  return { status: 200, songs };
+}
+
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -394,22 +427,37 @@ function createWebServer({ search = searchYouTube } = {}) {
         if (req.method === 'POST' && name === null) {
           let body;
           try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
-          const newName = sanitizeName(body.name);
-          if (!newName) return sendJson(res, 400, { error: 'Nama playlist tidak valid (hanya huruf, angka, dash, underscore)' });
-          // "list" is taken by `!playlist list`, so a playlist with that name could never be played
-          if (newName === 'list') return sendJson(res, 400, { error: 'Nama "list" sudah dipakai untuk !playlist list' });
-          if (playlists[newName]) return sendJson(res, 409, { error: `Playlist "${newName}" sudah ada` });
-          playlists[newName] = [];
+          const check = validatePlaylistName(body.name, playlists);
+          if (check.error) return sendJson(res, check.status, { error: check.error });
+          playlists[check.name] = [];
           savePlaylists(playlists);
-          return sendJson(res, 200, { success: true, name: newName });
+          return sendJson(res, 200, { success: true, name: check.name });
         }
 
         if (!name || !playlists[name]) return sendJson(res, 404, { error: 'Playlist tidak ditemukan' });
+
+        if (req.method === 'PATCH' && !isSongs) {
+          let body;
+          try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
+          const result = renamePlaylistInMap(playlists, name, body.newName);
+          if (result.error) return sendJson(res, result.status, { error: result.error });
+          if (result.name !== name) savePlaylists(playlists);
+          return sendJson(res, 200, { success: true, name: result.name });
+        }
 
         if (req.method === 'DELETE' && !isSongs) {
           delete playlists[name];
           savePlaylists(playlists);
           return sendJson(res, 200, { success: true });
+        }
+
+        if (req.method === 'PATCH' && isSongs && index === null) {
+          let body;
+          try { body = await parseJsonBody(req); } catch { return sendJson(res, 400, { error: 'Format JSON tidak valid' }); }
+          const result = reorderPlaylistSongsInMap(playlists, name, body.from, body.to);
+          if (result.error) return sendJson(res, result.status, { error: result.error });
+          if (body.from !== body.to) savePlaylists(playlists);
+          return sendJson(res, 200, { success: true, songs: result.songs });
         }
 
         if (req.method === 'POST' && isSongs && index === null) {
@@ -472,6 +520,8 @@ module.exports = {
   createWebServer,
   startWebServer,
   sanitizeName,
+  renamePlaylistInMap,
+  reorderPlaylistSongsInMap,
   getPin,
   SOUNDS_DIR,
   PUBLIC_DIR,

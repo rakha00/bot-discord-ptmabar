@@ -273,7 +273,7 @@ assert.strictEqual(typeof getQueue, 'function');
 console.log('✔ YouTube Music playback, queue, skip logic & embed schemas valid');
 
 // 7. Test Web Soundboard Manager (Auth, Endpoints, Upload, Rename, Delete)
-const { createWebServer, sanitizeName, getPin, SOUNDS_DIR, normalizeSound } = require('./src/web/server');
+const { createWebServer, sanitizeName, renamePlaylistInMap, reorderPlaylistSongsInMap, getPin, SOUNDS_DIR, normalizeSound } = require('./src/web/server');
 const path = require('node:path');
 
 // Test sanitization & PIN logic
@@ -428,15 +428,21 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
       assert.strictEqual((await call('/api/playlists', 'POST', { name: 'List' })).status, 400, '"list" is reserved for !playlist list');
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'satu' })).status, 200);
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'dua' })).status, 200);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: 'tiga' })).status, 200);
       assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'POST', { query: '' })).status, 400, 'empty query');
       assert.strictEqual((await call('/api/playlists/nope/songs', 'POST', { query: 'x' })).status, 404);
+      // Reorder songs & rename playlist via API
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'PATCH', { from: 2, to: 0 })).status, 200);
+      assert.strictEqual((await call('/api/playlists/galaumalam/songs', 'PATCH', { from: 9, to: 0 })).status, 400);
+      assert.strictEqual((await call('/api/playlists/galaumalam', 'PATCH', { newName: 'List' })).status, 400);
+      assert.strictEqual((await call('/api/playlists/galaumalam', 'PATCH', { newName: 'Galau 2' })).status, 200);
       let list = (await (await call('/api/playlists')).json()).playlists;
-      assert.deepStrictEqual(list.map(p => [p.name, p.songs.map(s => s.title)]), [['galaumalam', ['Lagu satu', 'Lagu dua']]]);
-      assert.strictEqual((await call('/api/playlists/galaumalam/songs/0', 'DELETE')).status, 200);
-      assert.strictEqual((await call('/api/playlists/galaumalam/songs/5', 'DELETE')).status, 404);
+      assert.deepStrictEqual(list.map(p => [p.name, p.songs.map(s => s.title)]), [['galau2', ['Lagu tiga', 'Lagu satu', 'Lagu dua']]]);
+      assert.strictEqual((await call('/api/playlists/galau2/songs/0', 'DELETE')).status, 200);
+      assert.strictEqual((await call('/api/playlists/galau2/songs/5', 'DELETE')).status, 404);
       list = (await (await call('/api/playlists')).json()).playlists;
-      assert.deepStrictEqual(list[0].songs.map(s => s.title), ['Lagu dua']);
-      assert.strictEqual((await call('/api/playlists/galaumalam', 'DELETE')).status, 200);
+      assert.deepStrictEqual(list[0].songs.map(s => s.title), ['Lagu satu', 'Lagu dua']);
+      assert.strictEqual((await call('/api/playlists/galau2', 'DELETE')).status, 200);
       assert.deepStrictEqual((await (await call('/api/playlists')).json()).playlists, []);
       assert.strictEqual((await fetch(`${baseUrl}/api/playlists`)).status, 401, 'playlists need the PIN');
       fs.rmSync(process.env.PLAYLISTS_FILE, { force: true });
@@ -515,6 +521,32 @@ assert.strictEqual(sanitizeName('../../hack'), 'hack');
     keepName(el);
     assert.strictEqual(el.value, 'aku');
     assert.strictEqual(el.caret, 2);
+
+    // Playlist rename & song reorder helpers (always run, including in sandbox)
+    {
+      const map = { galau: [{ title: 'A' }, { title: 'B' }, { title: 'C' }], chill: [] };
+      assert.strictEqual(renamePlaylistInMap(map, 'nope', 'baru').status, 404);
+      assert.strictEqual(renamePlaylistInMap(map, 'galau', 'list').status, 400);
+      assert.strictEqual(renamePlaylistInMap(map, 'galau', 'chill').status, 409);
+      assert.strictEqual(renamePlaylistInMap(map, 'galau', 'galau').name, 'galau');
+      assert.deepStrictEqual(renamePlaylistInMap(map, 'galau', 'Mabar Malam!'), { status: 200, name: 'mabarmalam' });
+      assert.strictEqual(map.galau, undefined);
+      assert.strictEqual(map.mabarmalam.length, 3);
+
+      assert.strictEqual(reorderPlaylistSongsInMap(map, 'nope', 0, 1).status, 404);
+      assert.strictEqual(reorderPlaylistSongsInMap(map, 'mabarmalam', -1, 1).status, 400);
+      assert.strictEqual(reorderPlaylistSongsInMap(map, 'mabarmalam', 0, 3).status, 400);
+      assert.strictEqual(reorderPlaylistSongsInMap(map, 'mabarmalam', '0', 1).status, 400);
+      assert.deepStrictEqual(
+        reorderPlaylistSongsInMap(map, 'mabarmalam', 2, 0).songs.map(s => s.title),
+        ['C', 'A', 'B']
+      );
+      assert.deepStrictEqual(
+        reorderPlaylistSongsInMap(map, 'mabarmalam', 0, 1).songs.map(s => s.title),
+        ['A', 'C', 'B']
+      );
+    }
+    assert.ok(uiSrc.includes('renamePlaylist()') && uiSrc.includes('moveSong('));
 
     // Loudness normalization & seek stream: verify real ffmpeg output (skipped without ffmpeg)
     const { spawn, spawnSync } = require('node:child_process');

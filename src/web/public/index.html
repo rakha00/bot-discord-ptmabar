@@ -151,17 +151,26 @@
     .pl-detail { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); min-width: 0; }
     .pl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
     .pl-head h2 { font-size: 18px; line-height: 26px; font-weight: 600; }
+    .pl-actions { display: flex; gap: 4px; flex: none; }
     .pl-add { display: flex; gap: 8px; margin: 20px 0 16px; }
     .pl-add .field { flex: 1; }
     .field input.plain { font-family: var(--font); }
     .songs { padding-left: 28px; }
     .pl-detail .empty { margin-top: 0; }
     .songs li { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+    .songs li[draggable="true"] { cursor: grab; }
+    .songs li.dragging { opacity: .45; }
+    .songs li.drag-over { box-shadow: inset 0 2px 0 var(--primary); }
     .songs li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
-    .song { display: flex; align-items: center; gap: 12px; }
+    .song { display: flex; align-items: center; gap: 8px; }
     .song a { flex: 1; min-width: 0; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .song a:hover { text-decoration: underline; }
-    .song .dur { color: var(--muted); flex: none; }
+    .song .dur { color: var(--muted); flex: none; margin-right: 4px; }
+    .song-order { display: flex; gap: 2px; flex: none; }
+    .move { width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
+      display: grid; place-items: center; font-weight: 600; }
+    .move:hover:not(:disabled) { background: var(--tint); color: var(--text); }
+    .move:disabled { opacity: .3; cursor: default; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
     .btn-danger { background: var(--negative); color: var(--ground); border-color: var(--negative); }
     .btn-danger:hover { opacity: .9; background: var(--negative); }
@@ -756,19 +765,31 @@
             <button class="cmd" onclick="copyCommand('${pl.name}', '!playlist')" title="Salin command">!playlist ${esc(pl.name)}
               <svg width="12" height="12" aria-hidden="true"><use href="#i-copy"/></svg></button>
           </div>
-          <button class="link danger" onclick="deletePlaylist()">Hapus playlist</button>
+          <div class="pl-actions">
+            <button class="link" onclick="renamePlaylist()">Ganti nama</button>
+            <button class="link danger" onclick="deletePlaylist()">Hapus playlist</button>
+          </div>
         </div>
         <form class="pl-add" onsubmit="event.preventDefault(); addSong()">
           <div class="field"><input class="plain" id="song-input" placeholder="Judul lagu atau URL YouTube" autocomplete="off" aria-label="Judul lagu atau URL YouTube" /></div>
           <button class="btn btn-primary" id="song-btn" type="submit">Tambah lagu</button>
         </form>
         ${pl.songs.length
-          ? `<ol class="songs">${pl.songs.map((s, i) => `
-              <li><div class="song">
-                <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
-                <span class="dur num">${esc(s.duration)}</span>
-                <button class="link danger" onclick="removeSong(${i})">Hapus</button>
-              </div></li>`).join('')}</ol>`
+          ? `<ol class="songs" id="pl-songs">${pl.songs.map((s, i) => `
+              <li draggable="${pl.songs.length > 1}"
+                  ondragstart="onSongDragStart(event, ${i})" ondragover="onSongDragOver(event)"
+                  ondragleave="onSongDragLeave(event)" ondrop="onSongDrop(event, ${i})" ondragend="onSongDragEnd()">
+                <div class="song">
+                  <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>
+                  <span class="dur num">${esc(s.duration)}</span>
+                  ${pl.songs.length > 1 ? `
+                    <span class="song-order">
+                      <button class="move" type="button" onclick="moveSong(${i}, ${i - 1})" ${i === 0 ? 'disabled' : ''} aria-label="Naikkan urutan" title="Naik">↑</button>
+                      <button class="move" type="button" onclick="moveSong(${i}, ${i + 1})" ${i === pl.songs.length - 1 ? 'disabled' : ''} aria-label="Turunkan urutan" title="Turun">↓</button>
+                    </span>` : ''}
+                  <button class="link danger" onclick="removeSong(${i})">Hapus</button>
+                </div>
+              </li>`).join('')}</ol>`
           : '<p class="empty">Belum ada lagu di playlist ini.</p>'}`;
     }
 
@@ -784,6 +805,62 @@
         selectedPl = name;
         showToast(`Playlist ${name} dibuat`);
         loadPlaylists();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    async function renamePlaylist() {
+      const pl = playlists.find(p => p.name === selectedPl);
+      if (!pl) return;
+      const newName = cleanName(await ask({
+        title: 'Ganti nama playlist',
+        message: `Command lama !playlist ${pl.name} tidak bisa dipakai lagi.`,
+        confirm: 'Simpan', value: pl.name, prefix: '!playlist',
+      }) ?? '');
+      if (!newName || newName === pl.name) return;
+      try {
+        const { name } = await api(`/api/playlists/${encodeURIComponent(pl.name)}`, 'PATCH', { newName });
+        selectedPl = name;
+        showToast(`Sekarang dipanggil dengan !playlist ${name}`);
+        loadPlaylists();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    let dragSongIdx = null;
+    function onSongDragStart(e, i) {
+      dragSongIdx = i;
+      e.dataTransfer.effectAllowed = 'move';
+      e.currentTarget.classList.add('dragging');
+    }
+    function onSongDragOver(e) {
+      if (dragSongIdx === null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      e.currentTarget.classList.add('drag-over');
+    }
+    function onSongDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+    function onSongDrop(e, i) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      const from = dragSongIdx;
+      dragSongIdx = null;
+      if (from !== null && from !== i) moveSong(from, i);
+    }
+    function onSongDragEnd() {
+      dragSongIdx = null;
+      document.querySelectorAll('#pl-songs li').forEach(el => el.classList.remove('dragging', 'drag-over'));
+    }
+
+    async function moveSong(from, to) {
+      const pl = playlists.find(p => p.name === selectedPl);
+      if (!pl || from === to || to < 0 || to >= pl.songs.length) return;
+      try {
+        const { songs } = await api(`/api/playlists/${encodeURIComponent(pl.name)}/songs`, 'PATCH', { from, to });
+        pl.songs = songs;
+        renderPlaylists();
       } catch (err) {
         showToast(err.message, true);
       }
